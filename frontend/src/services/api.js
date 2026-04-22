@@ -32,6 +32,7 @@ export const authAPI = {
   getMe: () => api.get('/auth/me').then((r) => r.data.user),
   linkRiot: (gameName, tagLine, walletAddress) =>
     api.post('/auth/link-riot', { gameName, tagLine, walletAddress }).then((r) => r.data),
+};
 // ── Match endpoints ────────────────────────────────────────────
 export const matchAPI = {
   getMatches: () => api.get('/matches').then((r) => r.data.matches),
