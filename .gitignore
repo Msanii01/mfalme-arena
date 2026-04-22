@@ -1,0 +1,36 @@
+# Environment variables — NEVER commit
+.env
+.env.local
+.env.*.local
+frontend/.env
+frontend/.env.local
+
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Build outputs
+dist/
+build/
+.next/
+
+# Hardhat
+artifacts/
+cache/
+typechain-types/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Misc
+*.pem
+coverage/

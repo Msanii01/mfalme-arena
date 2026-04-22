@@ -1,0 +1,18 @@
+{
+  "name": "mfalme-arena-contracts",
+  "version": "1.0.0",
+  "description": "Smart contracts for Mfalme Arena",
+  "scripts": {
+    "compile": "hardhat compile",
+    "deploy:all": "npx hardhat run scripts/deploy-paymaster.js --network baseSepolia && npx hardhat run scripts/deploy-escrow.js --network baseSepolia && npx hardhat run scripts/deploy-tournament-pool.js --network baseSepolia"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "hardhat": "^2.22.6"
+  },
+  "dependencies": {
+    "@account-abstraction/contracts": "^0.6.0",
+    "@openzeppelin/contracts": "^5.0.2",
+    "dotenv": "^16.4.5"
+  }
+}
