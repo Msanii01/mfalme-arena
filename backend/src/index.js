@@ -70,13 +70,13 @@ app.use('/auth', authRoutes);
 // const walletRoutes      = require('./routes/wallet');
 // app.use('/wallet', walletRoutes);
 
-// TODO: wire up in Phase 5
-// const matchRoutes       = require('./routes/matches');
-// app.use('/matches', matchRoutes);
+// Phase 5
+const matchRoutes = require('./routes/matches');
+app.use('/matches', matchRoutes);
 
-// TODO: wire up in Phase 5
-// const webhookRoutes     = require('./routes/webhooks');
-// app.use('/webhooks', webhookRoutes);
+// Phase 5
+const webhookRoutes = require('./routes/webhooks');
+app.use('/webhooks', webhookRoutes);
 
 // TODO: wire up in Phase 6
 // const tournamentRoutes  = require('./routes/tournaments');

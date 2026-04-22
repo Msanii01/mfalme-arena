@@ -52,6 +52,10 @@ ReactDOM.createRoot(document.getElementById('root')).render(
           loginMethods: ['email', 'google'],
           appearance: { theme: 'dark', accentColor: '#F5A623' },
           embeddedWallets: { createOnLogin: 'users-without-wallets' },
+          smartWallets: {
+            createOnLogin: 'all-users',
+            requireSponsorship: true
+          },
           defaultChain: baseSepolia,
           supportedChains: [baseSepolia],
         }}
