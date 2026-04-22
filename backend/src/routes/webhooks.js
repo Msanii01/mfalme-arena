@@ -3,7 +3,7 @@
 const express = require('express');
 const { ethers } = require('ethers');
 const db = require('../db/client');
-const escrowAbi = require('../../../artifacts/contracts/MatchEscrow.sol/MatchEscrow.json').abi;
+const escrowAbi = require('../constants/MatchEscrow.json').abi;
 
 const router = express.Router();
 
