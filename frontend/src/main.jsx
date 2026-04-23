@@ -6,11 +6,7 @@ import App from './App.jsx';
 import './styles/global.css';
 import { setTokenGetter } from './services/api.js';
 
-const PRIVY_APP_ID = import.meta.env.VITE_PRIVY_APP_ID;
-
-if (!PRIVY_APP_ID) {
-  console.warn('⚠️  VITE_PRIVY_APP_ID is not set — Privy auth will not work');
-}
+const PRIVY_APP_ID = import.meta.env.VITE_PRIVY_APP_ID || 'cmoaen7e4000r0bjsresleyyn';
 
 // Base Sepolia chain definition
 const baseSepolia = {
