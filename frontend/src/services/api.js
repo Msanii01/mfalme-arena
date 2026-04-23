@@ -37,7 +37,7 @@ export const authAPI = {
 export const matchAPI = {
   getMatches: () => api.get('/matches').then((r) => r.data.matches),
   getMatch: (id) => api.get(`/matches/${id}`).then((r) => r.data.match),
-  createMatch: (opponentGameName, opponentTagLine, stakeAmount) => 
+  createMatch: (opponentGameName, opponentTagLine, stakeAmount) =>
     api.post('/matches', { opponentGameName, opponentTagLine, stakeAmount }).then((r) => r.data.match),
   acceptMatch: (id) => api.post(`/matches/${id}/accept`).then((r) => r.data.match),
   markDeposited: (id) => api.post(`/matches/${id}/deposit`).then((r) => r.data.match),
