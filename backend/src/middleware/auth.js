@@ -12,6 +12,10 @@ const privy = new PrivyClient({
   appSecret: process.env.PRIVY_APP_SECRET
 });
 
+console.log('Privy methods:', Object.keys(privy));
+console.log('Privy prototype methods:', Object.keys(Object.getPrototypeOf(privy)));
+
+
 
 
 
@@ -40,7 +44,8 @@ async function requireAuth(req, res, next) {
     next();
   } catch (error) {
     console.error('Privy authentication failed:', error.message);
-    res.status(401).json({ error: 'Auth failed: ' + error.message });
+    const methods = Object.keys(privy).concat(Object.keys(Object.getPrototypeOf(privy)));
+    res.status(401).json({ error: `Auth failed: ${error.message}. Available methods: ${methods.join(', ')}` });
   }
 }
 
