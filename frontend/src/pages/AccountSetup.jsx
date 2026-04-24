@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { usePrivy } from '@privy-io/react-auth';
-import { authAPI } from '../services/api.js';
+import { authAPI, setTokenGetter } from '../services/api.js';
 import { useCurrentUser } from '../hooks/useCurrentUser.js';
 
 export default function AccountSetup() {
-  const { user: privyUser, logout } = usePrivy();
+  const { user: privyUser, logout, getAccessToken } = usePrivy();
   const { user: dbUser, refetch } = useCurrentUser();
   const navigate = useNavigate();
 
@@ -39,6 +39,9 @@ export default function AccountSetup() {
     setLoading(true);
     setError(null);
     try {
+      // Re-inject a fresh token right before the call to avoid race conditions
+      // where PrivyTokenInjector hasn't fired yet after a fresh login.
+      setTokenGetter(getAccessToken);
       const result = await authAPI.linkRiot(gameName.trim(), tagLine.trim(), walletAddress);
       setSuccess(`Linked! Welcome, ${result.riot.gameName}#${result.riot.tagLine} 🎮`);
       await refetch();
