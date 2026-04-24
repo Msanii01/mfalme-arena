@@ -37,7 +37,7 @@ async function requireAuth(req, res, next) {
     next();
   } catch (error) {
     console.error('Privy authentication failed:', error.message);
-    res.status(401).json({ error: 'Invalid or expired token' });
+    res.status(401).json({ error: 'Auth failed: ' + error.message });
   }
 }
 
