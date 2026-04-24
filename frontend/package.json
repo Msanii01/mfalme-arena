@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite --port 5173",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@privy-io/react-auth": "^2.4.1",
@@ -18,7 +20,11 @@
     "wagmi": "^2.12.0"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@vitejs/plugin-react": "^4.3.4",
-    "vite": "^6.3.2"
+    "jsdom": "^29.0.2",
+    "vite": "^6.3.2",
+    "vitest": "^4.1.5"
   }
 }

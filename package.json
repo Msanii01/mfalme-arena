@@ -4,7 +4,9 @@
   "description": "Smart contracts for Mfalme Arena",
   "scripts": {
     "compile": "hardhat compile",
-    "deploy:all": "npx hardhat run scripts/deploy-paymaster.js --network baseSepolia && npx hardhat run scripts/deploy-escrow.js --network baseSepolia && npx hardhat run scripts/deploy-tournament-pool.js --network baseSepolia"
+    "deploy:all": "npx hardhat run scripts/deploy-paymaster.js --network baseSepolia && npx hardhat run scripts/deploy-escrow.js --network baseSepolia && npx hardhat run scripts/deploy-tournament-pool.js --network baseSepolia",
+    "test:contracts": "hardhat test",
+    "test:all": "npm run test:contracts && npm run test --prefix backend && npm run test --prefix frontend"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",

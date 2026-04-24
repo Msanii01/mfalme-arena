@@ -1,6 +1,7 @@
 'use strict';
 
 const axios = require('axios');
+const https = require('https');
 
 const RIOT_API_KEY = process.env.RIOT_API_KEY;
 // For Americas accounts (e.g. NA, BR, LAN, LAS), the cluster is americas.
@@ -10,7 +11,8 @@ const api = axios.create({
   baseURL: `https://${REGION_CLUSTER}.api.riotgames.com`,
   headers: {
     'X-Riot-Token': RIOT_API_KEY
-  }
+  },
+  httpsAgent: new https.Agent({ family: 4 })
 });
 
 /**
