@@ -147,7 +147,7 @@ export default function AccountSetup() {
                     maxLength={8}
                   />
                 </div>
-                <p className="form-hint">Example: Faker#KR1 · Case-sensitive · Americas region</p>
+                <p className="form-hint">Example: PlayerName#NA1 · Case-sensitive · Must be an Americas server account</p>
               </div>
 
               {walletAddress && (
@@ -180,9 +180,35 @@ export default function AccountSetup() {
           )}
         </div>
 
-        <p style={{ textAlign: 'center', marginTop: 20, fontSize: 12, color: 'var(--text-muted)' }}>
-          Only League of Legends accounts on Americas servers are supported during beta.
-        </p>
+        {/* Region notice */}
+        <div style={{
+          marginTop: 20,
+          background: 'rgba(245,166,35,0.06)',
+          border: '1px solid rgba(245,166,35,0.2)',
+          borderRadius: 12,
+          padding: '14px 18px',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <span style={{ fontSize: 14 }}>🌎</span>
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--gold)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Supported Regions (Beta)</span>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+            {['NA — North America', 'BR — Brazil', 'LAN — Latin America N.', 'LAS — Latin America S.'].map(r => (
+              <span key={r} style={{
+                fontSize: 11,
+                fontWeight: 600,
+                color: 'var(--text-secondary)',
+                background: 'rgba(255,255,255,0.05)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 6,
+                padding: '3px 8px',
+              }}>{r}</span>
+            ))}
+          </div>
+          <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: 0, lineHeight: 1.5 }}>
+            EU, KR, and SEA region support is coming in a future update. Your account must be registered on one of the Americas servers above.
+          </p>
+        </div>
       </div>
     </div>
   );

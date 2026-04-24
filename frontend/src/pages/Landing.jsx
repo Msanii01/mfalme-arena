@@ -66,6 +66,22 @@ export default function Landing() {
             </div>
           ))}
         </div>
+
+        {/* Region availability */}
+        <div style={{ marginTop: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>🌎 Americas Servers Only (Beta):</span>
+          {['NA', 'BR', 'LAN', 'LAS'].map(r => (
+            <span key={r} style={{
+              fontSize: 11,
+              fontWeight: 700,
+              color: 'var(--text-secondary)',
+              background: 'rgba(245,166,35,0.08)',
+              border: '1px solid rgba(245,166,35,0.2)',
+              borderRadius: 5,
+              padding: '2px 7px',
+            }}>{r}</span>
+          ))}
+        </div>
       </div>
     </div>
   );
