@@ -59,7 +59,7 @@ export default function AccountSetup() {
       } else if (status === 409) {
         setError('This Riot account is already linked to another Mfalme player.');
       } else if (status === 401) {
-        setError('Session expired. Please sign out and sign back in, then try again.');
+        setError(msg || 'Session expired. Please sign out and sign back in, then try again.');
       } else if (!err.response) {
         setError('Cannot reach server. Check your internet connection.');
       } else {
