@@ -5,9 +5,14 @@ import { authAPI } from '../services/api.js';
 import { useCurrentUser } from '../hooks/useCurrentUser.js';
 
 export default function AccountSetup() {
-  const { user: privyUser } = usePrivy();
+  const { user: privyUser, logout } = usePrivy();
   const { user: dbUser, refetch } = useCurrentUser();
   const navigate = useNavigate();
+
+  const handleSignOut = async () => {
+    await logout();
+    navigate('/', { replace: true });
+  };
 
   const [gameName, setGameName] = useState('');
   const [tagLine, setTagLine]   = useState('');
@@ -59,6 +64,26 @@ export default function AccountSetup() {
 
   return (
     <div style={{ position: 'relative', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', padding: '40px 24px' }}>
+      {/* Sign out button — top right */}
+      <button
+        onClick={handleSignOut}
+        style={{
+          position: 'absolute',
+          top: 20,
+          right: 20,
+          zIndex: 10,
+          background: 'rgba(255,255,255,0.05)',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: 8,
+          color: 'var(--text-muted)',
+          fontSize: 12,
+          fontWeight: 600,
+          padding: '6px 14px',
+          cursor: 'pointer',
+        }}
+      >
+        Sign Out
+      </button>
       {/* Background */}
       <div className="hero-bg">
         <div className="hero-orb hero-orb-1" />
