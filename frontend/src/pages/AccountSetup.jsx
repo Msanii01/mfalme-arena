@@ -40,12 +40,17 @@ export default function AccountSetup() {
       setTimeout(() => navigate('/dashboard', { replace: true }), 1500);
     } catch (err) {
       const msg = err.response?.data?.error;
-      if (err.response?.status === 404) {
+      const status = err.response?.status;
+      if (status === 404) {
         setError(`Riot account "${gameName}#${tagLine}" not found. Check your Game Name and Tag Line.`);
-      } else if (err.response?.status === 409) {
+      } else if (status === 409) {
         setError('This Riot account is already linked to another Mfalme player.');
+      } else if (status === 401) {
+        setError('Session expired. Please sign out and sign back in, then try again.');
+      } else if (!err.response) {
+        setError('Cannot reach server. Check your internet connection.');
       } else {
-        setError(msg || 'Something went wrong. Try again.');
+        setError(`Error ${status}: ${msg || 'Something went wrong. Try again.'}`);
       }
     } finally {
       setLoading(false);
