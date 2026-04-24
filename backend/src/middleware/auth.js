@@ -7,10 +7,13 @@ if (!process.env.PRIVY_APP_ID || !process.env.PRIVY_APP_SECRET) {
   console.error('Missing PRIVY_APP_ID or PRIVY_APP_SECRET in environment');
 }
 
-const privy = new PrivyClient(
-  process.env.PRIVY_APP_ID,
-  process.env.PRIVY_APP_SECRET
-);
+const privy = new PrivyClient({
+  appId: process.env.PRIVY_APP_ID,
+  appSecret: process.env.PRIVY_APP_SECRET
+});
+
+
+
 
 /**
  * Express middleware to enforce Privy authentication.
