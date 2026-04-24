@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { usePrivy } from '@privy-io/react-auth';
-import { authAPI, setTokenGetter } from '../services/api.js';
+import { authAPI } from '../services/api.js';
 import { useCurrentUser } from '../hooks/useCurrentUser.js';
 
 export default function AccountSetup() {
@@ -39,10 +39,15 @@ export default function AccountSetup() {
     setLoading(true);
     setError(null);
     try {
-      // Re-inject a fresh token right before the call to avoid race conditions
-      // where PrivyTokenInjector hasn't fired yet after a fresh login.
-      setTokenGetter(getAccessToken);
-      const result = await authAPI.linkRiot(gameName.trim(), tagLine.trim(), walletAddress);
+      // Explicitly get a fresh Privy token and pass it directly.
+      // This bypasses the async interceptor which was silently dropping the token.
+      const freshToken = await getAccessToken();
+      if (!freshToken) {
+        setError('Session expired. Please use the Sign Out button above and sign back in.');
+        return;
+      }
+
+      const result = await authAPI.linkRiot(gameName.trim(), tagLine.trim(), walletAddress, freshToken);
       setSuccess(`Linked! Welcome, ${result.riot.gameName}#${result.riot.tagLine} 🎮`);
       await refetch();
       setTimeout(() => navigate('/dashboard', { replace: true }), 1500);

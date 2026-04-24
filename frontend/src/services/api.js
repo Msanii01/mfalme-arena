@@ -30,8 +30,16 @@ api.interceptors.request.use(async (config) => {
 // ── Auth endpoints ───────────────────────────────────────────
 export const authAPI = {
   getMe: () => api.get('/auth/me').then((r) => r.data.user),
-  linkRiot: (gameName, tagLine, walletAddress) =>
-    api.post('/auth/link-riot', { gameName, tagLine, walletAddress }).then((r) => r.data),
+
+  // Explicit-token version: bypasses the interceptor entirely.
+  // Use this for critical first-login calls where the interceptor
+  // may not have received the token getter yet.
+  linkRiot: (gameName, tagLine, walletAddress, token) =>
+    api.post(
+      '/auth/link-riot',
+      { gameName, tagLine, walletAddress },
+      token ? { headers: { Authorization: `Bearer ${token}` } } : {}
+    ).then((r) => r.data),
 };
 // ── Match endpoints ────────────────────────────────────────────
 export const matchAPI = {
