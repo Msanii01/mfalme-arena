@@ -38,23 +38,17 @@ async function requireAuth(req, res, next) {
     const token = authHeader.split(' ')[1];
     
     // Verify the JWT token with Privy
-    const verifiedClaims = await privy.verifyAuthToken(token);
+    const verifiedClaims = await privy.utils().auth().verifyAccessToken(token);
     
     // Attach the verified user ID to the request
     req.user = {
-      id: verifiedClaims.userId
+      id: verifiedClaims.userId || verifiedClaims.user_id // Handle both naming conventions just in case
     };
     
     next();
   } catch (error) {
     console.error('Privy authentication failed:', error.message);
-    const moduleKeys = Object.keys(require('@privy-io/node'));
-    const methods = Object.keys(privy).concat(Object.keys(Object.getPrototypeOf(privy)));
-    res.status(401).json({ 
-      error: `Auth failed: ${error.message}`,
-      module: moduleKeys.join(', '),
-      methods: methods.join(', ')
-    });
+    res.status(401).json({ error: `Auth failed: ${error.message}` });
   }
 }
 

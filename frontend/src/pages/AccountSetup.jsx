@@ -63,14 +63,7 @@ export default function AccountSetup() {
       } else if (!err.response) {
         setError('Cannot reach server. Check your internet connection.');
       } else {
-        let errorMsg = `Error ${status}: ${msg || 'Something went wrong. Try again.'}`;
-        if (err.response?.data?.module) {
-          errorMsg += ` [Mod: ${err.response.data.module}]`;
-        }
-        if (err.response?.data?.methods) {
-          errorMsg += ` [Methods: ${err.response.data.methods}]`;
-        }
-        setError(errorMsg);
+        setError(`Error ${status}: ${msg || 'Something went wrong. Try again.'}`);
       }
     } finally {
       setLoading(false);
