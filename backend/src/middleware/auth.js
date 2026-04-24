@@ -7,13 +7,17 @@ if (!process.env.PRIVY_APP_ID || !process.env.PRIVY_APP_SECRET) {
   console.error('Missing PRIVY_APP_ID or PRIVY_APP_SECRET in environment');
 }
 
+const privyModule = require('@privy-io/node');
+console.log('Privy module keys:', Object.keys(privyModule));
+
 const privy = new PrivyClient({
   appId: process.env.PRIVY_APP_ID,
   appSecret: process.env.PRIVY_APP_SECRET
 });
 
-console.log('Privy methods:', Object.keys(privy));
-console.log('Privy prototype methods:', Object.keys(Object.getPrototypeOf(privy)));
+console.log('Privy instance keys:', Object.keys(privy));
+console.log('Privy instance prototype keys:', Object.keys(Object.getPrototypeOf(privy)));
+
 
 
 
@@ -44,8 +48,13 @@ async function requireAuth(req, res, next) {
     next();
   } catch (error) {
     console.error('Privy authentication failed:', error.message);
+    const moduleKeys = Object.keys(require('@privy-io/node'));
     const methods = Object.keys(privy).concat(Object.keys(Object.getPrototypeOf(privy)));
-    res.status(401).json({ error: `Auth failed: ${error.message}. Available methods: ${methods.join(', ')}` });
+    res.status(401).json({ 
+      error: `Auth failed: ${error.message}`,
+      module: moduleKeys.join(', '),
+      methods: methods.join(', ')
+    });
   }
 }
 
