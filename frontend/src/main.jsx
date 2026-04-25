@@ -45,7 +45,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
       <PrivyProvider
         appId={PRIVY_APP_ID || 'placeholder-set-vite-privy-app-id'}
         config={{
-          loginMethods: ['email', 'google'],
+          loginMethods: ['email', 'wallet', 'google'],
           appearance: { theme: 'dark', accentColor: '#F5A623' },
           embeddedWallets: { createOnLogin: 'users-without-wallets' },
           smartWallets: {
