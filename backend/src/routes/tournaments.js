@@ -7,12 +7,25 @@ const db = require('../db/client');
 
 const router = express.Router();
 
-// Middleware to check if user is admin
-const requireAdmin = (req, res, next) => {
-  if (req.user.id !== process.env.ADMIN_PRIVY_USER_ID) {
-    return res.status(403).json({ error: 'Unauthorized: Admin access required' });
+// Middleware to check if user is admin via wallet address
+const requireAdmin = async (req, res, next) => {
+  try {
+    const userRes = await db.query('SELECT wallet_address FROM users WHERE privy_user_id = $1', [req.user.id]);
+    if (userRes.rows.length === 0) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required' });
+    }
+    
+    const userWallet = userRes.rows[0].wallet_address;
+    const adminWallet = process.env.ADMIN_WALLET_ADDRESS;
+    
+    if (!userWallet || !adminWallet || userWallet.toLowerCase() !== adminWallet.toLowerCase()) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required' });
+    }
+    
+    next();
+  } catch (error) {
+    next(error);
   }
-  next();
 };
 
 /**
