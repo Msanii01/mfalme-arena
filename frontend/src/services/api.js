@@ -51,4 +51,13 @@ export const matchAPI = {
   markDeposited: (id) => api.post(`/matches/${id}/deposit`).then((r) => r.data.match),
 };
 
+// ── Tournament endpoints ───────────────────────────────────────
+export const tournamentAPI = {
+  getTournaments: () => api.get('/tournaments').then((r) => r.data.tournaments),
+  createTournament: (name, prizePool) =>
+    api.post('/tournaments', { name, prizePool }).then((r) => r.data.tournament),
+  fundTournament: (id, txHash) => api.post(`/tournaments/${id}/fund`, { txHash }).then((r) => r.data.tournament),
+  registerTournament: (id) => api.post(`/tournaments/${id}/register`).then((r) => r.data.tournament),
+};
+
 export default api;

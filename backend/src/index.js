@@ -78,9 +78,9 @@ app.use('/matches', matchRoutes);
 const webhookRoutes = require('./routes/webhooks');
 app.use('/webhooks', webhookRoutes);
 
-// TODO: wire up in Phase 6
-// const tournamentRoutes  = require('./routes/tournaments');
-// app.use('/tournaments', tournamentRoutes);
+// Phase 6
+const tournamentRoutes  = require('./routes/tournaments');
+app.use('/tournaments', tournamentRoutes);
 
 // ── 404 handler ──────────────────────────────────────────────
 app.use((_req, res) => {
