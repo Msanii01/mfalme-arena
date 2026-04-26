@@ -72,6 +72,30 @@ export default function HostDashboard() {
 
       const provider = await externalWallet.getEthereumProvider();
 
+      // Ensure network is Base Sepolia (Chain ID 84532 -> 0x14a34)
+      try {
+        await provider.request({
+          method: 'wallet_switchEthereumChain',
+          params: [{ chainId: '0x14a34' }],
+        });
+      } catch (switchError) {
+        // This error code indicates that the chain has not been added to the wallet.
+        if (switchError.code === 4902) {
+          await provider.request({
+            method: 'wallet_addEthereumChain',
+            params: [{
+              chainId: '0x14a34',
+              chainName: 'Base Sepolia',
+              rpcUrls: ['https://sepolia.base.org'],
+              nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+              blockExplorerUrls: ['https://sepolia.basescan.org']
+            }],
+          });
+        } else {
+          throw switchError;
+        }
+      }
+
       const publicClient = createPublicClient({ chain: baseSepolia, transport: http() });
 
       // 2. Create tournament on-chain
