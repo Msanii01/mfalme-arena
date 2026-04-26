@@ -22,6 +22,7 @@ router.get('/', requireAuth, async (req, res, next) => {
        FROM tournaments t
        LEFT JOIN users u1 ON t.player_a_id = u1.user_id
        LEFT JOIN users u2 ON t.player_b_id = u2.user_id
+       WHERE t.status != 'created'
        ORDER BY t.created_at DESC`
     const tournaments = result.rows.map(t => {
       if (Buffer.isBuffer(t.contract_tournament_id)) {
