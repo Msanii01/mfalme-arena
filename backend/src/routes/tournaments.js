@@ -23,8 +23,13 @@ router.get('/', requireAuth, async (req, res, next) => {
        LEFT JOIN users u1 ON t.player_a_id = u1.user_id
        LEFT JOIN users u2 ON t.player_b_id = u2.user_id
        ORDER BY t.created_at DESC`
-    );
-    res.json({ tournaments: result.rows });
+    const tournaments = result.rows.map(t => {
+      if (Buffer.isBuffer(t.contract_tournament_id)) {
+        t.contract_tournament_id = '0x' + t.contract_tournament_id.toString('hex');
+      }
+      return t;
+    });
+    res.json({ tournaments });
   } catch (error) {
     next(error);
   }
@@ -46,8 +51,9 @@ router.post('/', requireAuth, async (req, res, next) => {
     if (userRes.rows.length === 0) return res.status(404).json({ error: 'Host profile not found' });
     const hostId = userRes.rows[0].user_id;
 
-    // Generate contract_tournament_id (bytes32 hex string)
-    const contractTournamentId = '0x' + crypto.randomBytes(32).toString('hex');
+    // Generate contract_tournament_id for Postgres BYTEA (hex string)
+    const randomHex = crypto.randomBytes(32).toString('hex');
+    const contractTournamentId = '\\x' + randomHex;
 
     const newTournament = await db.query(
       `INSERT INTO tournaments (created_by, name, prize_pool, status, contract_tournament_id)
@@ -55,8 +61,12 @@ router.post('/', requireAuth, async (req, res, next) => {
        RETURNING *`,
       [hostId, name, prizePool, contractTournamentId]
     );
+    const row = newTournament.rows[0];
+    if (Buffer.isBuffer(row.contract_tournament_id)) {
+      row.contract_tournament_id = '0x' + row.contract_tournament_id.toString('hex');
+    }
 
-    res.json({ tournament: newTournament.rows[0] });
+    res.json({ tournament: row });
   } catch (error) {
     next(error);
   }
@@ -77,7 +87,11 @@ router.post('/:id/fund', requireAuth, async (req, res, next) => {
     );
 
     if (result.rows.length === 0) return res.status(404).json({ error: 'Tournament not found' });
-    res.json({ tournament: result.rows[0] });
+    const row = result.rows[0];
+    if (Buffer.isBuffer(row.contract_tournament_id)) {
+      row.contract_tournament_id = '0x' + row.contract_tournament_id.toString('hex');
+    }
+    res.json({ tournament: row });
   } catch (error) {
     next(error);
   }
@@ -127,7 +141,11 @@ router.post('/:id/register', requireAuth, async (req, res, next) => {
     }
 
     const result = await db.query(updateQuery, updateParams);
-    res.json({ tournament: result.rows[0] });
+    const row = result.rows[0];
+    if (Buffer.isBuffer(row.contract_tournament_id)) {
+      row.contract_tournament_id = '0x' + row.contract_tournament_id.toString('hex');
+    }
+    res.json({ tournament: row });
   } catch (error) {
     next(error);
   }
