@@ -11,7 +11,8 @@ import ChallengeLobby from './pages/ChallengeLobby.jsx';
 import MatchStatus from './pages/MatchStatus.jsx';
 import TournamentLobby from './pages/TournamentLobby.jsx';
 import TournamentDetail from './pages/TournamentDetail.jsx';
-import AdminDashboard from './pages/AdminDashboard.jsx';
+import HostDashboard from './pages/HostDashboard.jsx';
+import TicTacArena from './pages/TicTacArena.jsx';
 
 /** Injects the Privy token getter into the API service after auth is ready */
 function PrivyTokenInjector() {
@@ -78,13 +79,14 @@ export default function App() {
         <Route path="/" element={authenticated ? <Navigate to="/dashboard" replace /> : <Landing />} />
         {/* requireProfile=false so un-linked users can reach setup */}
         <Route path="/setup" element={<ProtectedRoute requireProfile={false}><AccountSetup /></ProtectedRoute>} />
-        <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+        <Route path="/dashboard" element={<ProtectedRoute requireProfile={false}><Dashboard /></ProtectedRoute>} />
         <Route path="/deposit" element={<ProtectedRoute><DepositFlow /></ProtectedRoute>} />
         <Route path="/challenge" element={<ProtectedRoute><ChallengeLobby /></ProtectedRoute>} />
         <Route path="/match/:id" element={<ProtectedRoute><MatchStatus /></ProtectedRoute>} />
         <Route path="/tournaments" element={<TournamentLobby />} />
         <Route path="/tournaments/:id" element={<TournamentDetail />} />
-        <Route path="/admin" element={<ProtectedRoute><AdminDashboard /></ProtectedRoute>} />
+        <Route path="/host" element={<ProtectedRoute requireProfile={false}><HostDashboard /></ProtectedRoute>} />
+        <Route path="/tictactoe/:id" element={<ProtectedRoute requireProfile={false}><TicTacArena /></ProtectedRoute>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </>

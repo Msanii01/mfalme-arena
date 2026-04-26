@@ -60,4 +60,11 @@ export const tournamentAPI = {
   registerTournament: (id) => api.post(`/tournaments/${id}/register`).then((r) => r.data.tournament),
 };
 
+// ── Tic Tac Toe endpoints ──────────────────────────────────────
+export const tictactoeAPI = {
+  getGame: (id) => api.get(`/tictactoe/${id}`).then((r) => r.data.game),
+  initGame: (tournamentId, matchId) => api.post('/tictactoe/init', { tournamentId, matchId }).then((r) => r.data.game),
+  makeMove: (id, index) => api.post(`/tictactoe/${id}/move`, { index }).then((r) => r.data.game),
+};
+
 export default api;

@@ -8,7 +8,7 @@ import { useCurrentUser } from '../hooks/useCurrentUser.js';
 
 // Base Sepolia Addresses
 const USDC_ADDRESS = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
-const TOURNAMENT_POOL_ADDRESS = import.meta.env.VITE_TOURNAMENT_CONTRACT_ADDRESS || '0x5231e862E1E8f76990A32472Fe2ECd90Fb8B06C4';
+const TOURNAMENT_POOL_ADDRESS = import.meta.env.VITE_TOURNAMENT_CONTRACT_ADDRESS || '0x81D9859248489e73ccF00845EF3Bc7E2B59FC9f8';
 
 const ERC20_ABI = [
   { inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }], name: "approve", outputs: [{ name: "", type: "bool" }], type: "function" }
@@ -19,7 +19,7 @@ const TOURNAMENT_ABI = [
   { inputs: [{ name: "tournamentId", type: "bytes32" }], name: "fundTournament", outputs: [], type: "function" }
 ];
 
-export default function AdminDashboard() {
+export default function HostDashboard() {
   const navigate = useNavigate();
   const { user } = useCurrentUser();
   const { wallets } = useWallets();
@@ -130,7 +130,7 @@ export default function AdminDashboard() {
       <Sidebar />
       <main className="main-content" style={{ animation: 'fadeIn 0.3s ease-out' }}>
         <div className="page-header">
-          <h1 className="page-title">🛡️ Admin Dashboard</h1>
+          <h1 className="page-title">🛡️ Host Dashboard</h1>
           <p className="page-subtitle">Manage Tournaments and Prize Pools</p>
         </div>
 
@@ -141,14 +141,14 @@ export default function AdminDashboard() {
             
             {!externalWallet ? (
               <div style={{ textAlign: 'center', padding: '20px 0' }}>
-                <p style={{ marginBottom: 16 }}>You must connect your admin wallet to fund prize pools.</p>
+                <p style={{ marginBottom: 16 }}>You must connect your host wallet to fund prize pools.</p>
                 <button className="btn btn-primary" onClick={connectWallet}>
-                  Connect Admin Wallet (OKX/MetaMask)
+                  Connect Host Wallet (OKX/MetaMask)
                 </button>
               </div>
             ) : (
               <div style={{ marginBottom: 24, fontSize: 13, background: 'rgba(255,255,255,0.05)', padding: 12, borderRadius: 8 }}>
-                <strong>Admin Wallet Connected:</strong> <br/>
+                <strong>Host Wallet Connected:</strong> <br/>
                 <span className="text-muted">{externalWallet.address}</span>
               </div>
             )}

@@ -84,27 +84,43 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Setup CTA — show if no Riot account linked */}
-        {!hasProfile && (
-          <div
-            className="card card-gold"
-            style={{ marginBottom: 32, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}
-            onClick={() => navigate('/setup')}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-              <div style={{ fontSize: 40 }}>🎮</div>
-              <div>
-                <div className="heading">Link Your Riot Account</div>
-                <p style={{ color: 'var(--text-secondary)', fontSize: 14, marginTop: 4 }}>
-                  Required to play wagered matches. Takes 10 seconds.
-                </p>
-              </div>
-            </div>
-            <button id="btn-setup-now" className="btn btn-primary" onClick={(e) => { e.stopPropagation(); navigate('/setup'); }}>
-              Set Up Now →
+        <div className="grid-3" style={{ marginBottom: 32 }}>
+          {/* Riot CTA */}
+          <div className="card card-gold" style={{ cursor: 'pointer' }} onClick={() => navigate('/setup')}>
+            <div style={{ fontSize: 32, marginBottom: 12 }}>🎮</div>
+            <div className="heading">Link Riot Account</div>
+            <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginTop: 4, marginBottom: 16 }}>
+              Required for 1v1 LoL wagered matches.
+            </p>
+            <button className="btn btn-primary btn-sm btn-full" onClick={(e) => { e.stopPropagation(); navigate('/setup'); }}>
+              {hasProfile ? 'Manage Account' : 'Set Up Now'}
             </button>
           </div>
-        )}
+
+          {/* Tournament CTA */}
+          <div className="card card-purple" style={{ cursor: 'pointer' }} onClick={() => navigate('/tournaments')}>
+            <div style={{ fontSize: 32, marginBottom: 12 }}>🏆</div>
+            <div className="heading">Join Tournament</div>
+            <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginTop: 4, marginBottom: 16 }}>
+              Compete in sponsored prize pools.
+            </p>
+            <button className="btn btn-primary btn-sm btn-full" onClick={(e) => { e.stopPropagation(); navigate('/tournaments'); }}>
+              View Lobbies
+            </button>
+          </div>
+
+          {/* Host CTA */}
+          <div className="card" style={{ cursor: 'pointer', border: '1px solid var(--teal)' }} onClick={() => navigate('/host')}>
+            <div style={{ fontSize: 32, marginBottom: 12 }}>👑</div>
+            <div className="heading">Become a Host</div>
+            <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginTop: 4, marginBottom: 16 }}>
+              Sponsor a prize pool for the community.
+            </p>
+            <button className="btn btn-secondary btn-sm btn-full" onClick={(e) => { e.stopPropagation(); navigate('/host'); }}>
+              Host Dashboard
+            </button>
+          </div>
+        </div>
 
         {/* Stats grid */}
         <div className="grid-4" style={{ marginBottom: 32 }}>

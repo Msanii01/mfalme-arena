@@ -16,6 +16,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.29.0",
+    "socket.io-client": "^4.8.3",
     "viem": "^2.21.0",
     "wagmi": "^2.12.0"
   },

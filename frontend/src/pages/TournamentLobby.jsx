@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Sidebar from '../components/Sidebar.jsx';
-import { tournamentAPI } from '../services/api.js';
+import { tournamentAPI, tictactoeAPI } from '../services/api.js';
 import { useCurrentUser } from '../hooks/useCurrentUser.js';
 
 export default function TournamentLobby() {
@@ -28,10 +28,6 @@ export default function TournamentLobby() {
   };
 
   const handleRegister = async (id) => {
-    if (!user?.riot_puuid) {
-      setError('You must link your Riot account in Account Setup before registering.');
-      return;
-    }
 
     setProcessingId(id);
     setError(null);
@@ -41,6 +37,18 @@ export default function TournamentLobby() {
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to register');
     } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const handleEnterArena = async (id) => {
+    setProcessingId(id);
+    setError(null);
+    try {
+      const { game } = await tictactoeAPI.initGame(id, null);
+      navigate(`/tictactoe/${game.game_id}`);
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to enter arena');
       setProcessingId(null);
     }
   };
@@ -120,7 +128,16 @@ export default function TournamentLobby() {
                         <div className="text-gold" style={{ fontWeight: 600 }}>Waiting for opponent...</div>
                       )}
                       {isFull && isRegistered && (
-                        <div className="text-teal" style={{ fontWeight: 600 }}>Match Ready!</div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center' }}>
+                          <div className="text-teal" style={{ fontWeight: 600 }}>Match Ready!</div>
+                          <button 
+                            className={`btn btn-secondary${processingId === t.tournament_id ? ' btn-loading' : ''}`}
+                            onClick={() => handleEnterArena(t.tournament_id)}
+                            disabled={processingId === t.tournament_id}
+                          >
+                            {processingId === t.tournament_id ? 'Entering...' : 'Enter Arena ⚔️'}
+                          </button>
+                        </div>
                       )}
                       {isFull && !isRegistered && (
                         <button className="btn btn-ghost" disabled>Registration Closed</button>

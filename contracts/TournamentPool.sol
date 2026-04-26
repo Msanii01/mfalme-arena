@@ -33,6 +33,7 @@ contract TournamentPool is ReentrancyGuard, Ownable {
     struct Tournament {
         bytes32 tournamentId;
         uint256 prizePool;
+        address creator;
         address playerA;
         address playerB;
         TournamentStatus status;
@@ -64,12 +65,13 @@ contract TournamentPool is ReentrancyGuard, Ownable {
      * @param tournamentId  bytes32 identifier derived from internal UUID
      * @param prizePool     Total USDC prize pool in raw units (6 decimal precision)
      */
-    function createTournament(bytes32 tournamentId, uint256 prizePool) external onlyOwner {
+    function createTournament(bytes32 tournamentId, uint256 prizePool) external {
         require(tournaments[tournamentId].prizePool == 0, "Already exists");
         require(prizePool > 0, "Invalid prize pool");
         tournaments[tournamentId] = Tournament({
             tournamentId: tournamentId,
             prizePool:    prizePool,
+            creator:      msg.sender,
             playerA:      address(0),
             playerB:      address(0),
             status:       TournamentStatus.Created,
@@ -85,9 +87,10 @@ contract TournamentPool is ReentrancyGuard, Ownable {
      *         After funding, status moves from Created → Open (open for registration).
      * @param tournamentId  bytes32 tournament identifier
      */
-    function fundTournament(bytes32 tournamentId) external onlyOwner {
+    function fundTournament(bytes32 tournamentId) external {
         Tournament storage t = tournaments[tournamentId];
         require(t.status == TournamentStatus.Created, "Invalid status");
+        require(msg.sender == t.creator, "Only creator can fund");
         usdc.transferFrom(msg.sender, address(this), t.prizePool);
         t.status = TournamentStatus.Open;
         emit TournamentFunded(tournamentId, t.prizePool);
@@ -147,8 +150,9 @@ contract TournamentPool is ReentrancyGuard, Ownable {
      *         Can only cancel while Open (not Full or beyond).
      * @param tournamentId  bytes32 tournament identifier
      */
-    function cancel(bytes32 tournamentId) external onlyOwner nonReentrant {
+    function cancel(bytes32 tournamentId) external nonReentrant {
         Tournament storage t = tournaments[tournamentId];
+        require(msg.sender == t.creator || msg.sender == owner() || msg.sender == oracle, "Not authorized");
         require(
             t.status == TournamentStatus.Open || t.status == TournamentStatus.Funded,
             "Cannot cancel"
@@ -156,7 +160,7 @@ contract TournamentPool is ReentrancyGuard, Ownable {
         require(!t.settled, "Already settled");
         uint256 refund = t.prizePool;
         t.status = TournamentStatus.Cancelled;
-        usdc.transfer(owner(), refund);
+        usdc.transfer(t.creator, refund);
         emit TournamentCancelled(tournamentId, refund);
     }
 }

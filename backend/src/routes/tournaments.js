@@ -7,26 +7,7 @@ const db = require('../db/client');
 
 const router = express.Router();
 
-// Middleware to check if user is admin via wallet address
-const requireAdmin = async (req, res, next) => {
-  try {
-    const userRes = await db.query('SELECT wallet_address FROM users WHERE privy_user_id = $1', [req.user.id]);
-    if (userRes.rows.length === 0) {
-      return res.status(403).json({ error: 'Unauthorized: Admin access required' });
-    }
-    
-    const userWallet = userRes.rows[0].wallet_address;
-    const adminWallet = process.env.ADMIN_WALLET_ADDRESS;
-    
-    if (!userWallet || !adminWallet || userWallet.toLowerCase() !== adminWallet.toLowerCase()) {
-      return res.status(403).json({ error: 'Unauthorized: Admin access required' });
-    }
-    
-    next();
-  } catch (error) {
-    next(error);
-  }
-};
+// requireAdmin removed to allow decentralized hosts
 
 /**
  * GET /api/tournaments
@@ -51,19 +32,19 @@ router.get('/', requireAuth, async (req, res, next) => {
 
 /**
  * POST /api/tournaments
- * Create a new tournament (Admin only)
+ * Create a new tournament (Host)
  */
-router.post('/', requireAuth, requireAdmin, async (req, res, next) => {
+router.post('/', requireAuth, async (req, res, next) => {
   try {
     const { name, prizePool } = req.body;
     if (!name || !prizePool) {
       return res.status(400).json({ error: 'Missing name or prizePool' });
     }
 
-    // Get admin internal ID
+    // Get host internal ID
     const userRes = await db.query('SELECT user_id FROM users WHERE privy_user_id = $1', [req.user.id]);
-    if (userRes.rows.length === 0) return res.status(404).json({ error: 'Admin profile not found' });
-    const adminId = userRes.rows[0].user_id;
+    if (userRes.rows.length === 0) return res.status(404).json({ error: 'Host profile not found' });
+    const hostId = userRes.rows[0].user_id;
 
     // Generate contract_tournament_id (bytes32 hex string)
     const contractTournamentId = '0x' + crypto.randomBytes(32).toString('hex');
@@ -72,7 +53,7 @@ router.post('/', requireAuth, requireAdmin, async (req, res, next) => {
       `INSERT INTO tournaments (created_by, name, prize_pool, status, contract_tournament_id)
        VALUES ($1, $2, $3, 'created', $4)
        RETURNING *`,
-      [adminId, name, prizePool, contractTournamentId]
+      [hostId, name, prizePool, contractTournamentId]
     );
 
     res.json({ tournament: newTournament.rows[0] });
@@ -83,9 +64,9 @@ router.post('/', requireAuth, requireAdmin, async (req, res, next) => {
 
 /**
  * POST /api/tournaments/:id/fund
- * Mark tournament as funded (Admin only)
+ * Mark tournament as funded (Host)
  */
-router.post('/:id/fund', requireAuth, requireAdmin, async (req, res, next) => {
+router.post('/:id/fund', requireAuth, async (req, res, next) => {
   try {
     const { id } = req.params;
     const { txHash } = req.body;
@@ -116,9 +97,7 @@ router.post('/:id/register', requireAuth, async (req, res, next) => {
     if (userRes.rows.length === 0) return res.status(404).json({ error: 'User profile not found' });
     const player = userRes.rows[0];
 
-    if (!player.riot_puuid) {
-      return res.status(400).json({ error: 'You must link your Riot account to register' });
-    }
+    // Riot linking is no longer required for tournaments (Tic Tac Toe MVP)
 
     // Get tournament
     const tourneyRes = await db.query('SELECT * FROM tournaments WHERE tournament_id = $1', [id]);
@@ -137,12 +116,12 @@ router.post('/:id/register', requireAuth, async (req, res, next) => {
     let updateParams;
 
     if (!tournament.player_a_id) {
-      updateQuery = `UPDATE tournaments SET player_a_id = $1, player_a_puuid = $2 WHERE tournament_id = $3 RETURNING *`;
-      updateParams = [player.user_id, player.riot_puuid, id];
+      updateQuery = `UPDATE tournaments SET player_a_id = $1 WHERE tournament_id = $2 RETURNING *`;
+      updateParams = [player.user_id, id];
     } else if (!tournament.player_b_id) {
       // 2nd player sets status to full
-      updateQuery = `UPDATE tournaments SET player_b_id = $1, player_b_puuid = $2, status = 'full' WHERE tournament_id = $3 RETURNING *`;
-      updateParams = [player.user_id, player.riot_puuid, id];
+      updateQuery = `UPDATE tournaments SET player_b_id = $1, status = 'full' WHERE tournament_id = $2 RETURNING *`;
+      updateParams = [player.user_id, id];
     } else {
       return res.status(400).json({ error: 'Tournament is full' });
     }

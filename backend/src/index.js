@@ -7,7 +7,13 @@ const cors       = require('cors');
 const helmet     = require('helmet');
 const morgan     = require('morgan');
 
+const http       = require('http');
+const socket     = require('./socket');
+
 const app  = express();
+const server = http.createServer(app);
+socket.init(server);
+
 const PORT = process.env.PORT || 3001;
 
 // ── Security middleware ──────────────────────────────────────
@@ -82,6 +88,10 @@ app.use('/webhooks', webhookRoutes);
 const tournamentRoutes  = require('./routes/tournaments');
 app.use('/tournaments', tournamentRoutes);
 
+// Tic Tac Toe MVP
+const tictactoeRoutes = require('./routes/tictactoe');
+app.use('/tictactoe', tictactoeRoutes);
+
 // ── 404 handler ──────────────────────────────────────────────
 app.use((_req, res) => {
   res.status(404).json({ error: 'Not found', code: 'NOT_FOUND' });
@@ -98,7 +108,7 @@ app.use((err, _req, res, _next) => {
 });
 
 // ── Start ─────────────────────────────────────────────────────
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`\n👑 Mfalme Arena Backend`);
   console.log(`   Network: Base ${process.env.BASE_NETWORK || 'sepolia'}`);
   console.log(`   Listening on http://localhost:${PORT}`);
@@ -106,4 +116,4 @@ app.listen(PORT, () => {
   console.log(`   Environment: ${process.env.NODE_ENV || 'development'}\n`);
 });
 
-module.exports = app; // for testing
+module.exports = { app, server }; // for testing
