@@ -24,9 +24,18 @@ router.get('/', requireAuth, async (req, res, next) => {
        LEFT JOIN users u2 ON t.player_b_id = u2.user_id
        WHERE t.status != 'created'
        ORDER BY t.created_at DESC`
+    );
     const tournaments = result.rows.map(t => {
-      if (Buffer.isBuffer(t.contract_tournament_id)) {
-        t.contract_tournament_id = '0x' + t.contract_tournament_id.toString('hex');
+      // Postgres encode(..., 'hex') would be better, but since it's a SELECT *, 
+      // let's handle the object if pg already parsed it into a Buffer or JSON-like object
+      if (t.contract_tournament_id) {
+        if (Buffer.isBuffer(t.contract_tournament_id)) {
+          t.contract_tournament_id = '0x' + t.contract_tournament_id.toString('hex');
+        } else if (t.contract_tournament_id.type === 'Buffer' && Array.isArray(t.contract_tournament_id.data)) {
+          t.contract_tournament_id = '0x' + Buffer.from(t.contract_tournament_id.data).toString('hex');
+        } else if (typeof t.contract_tournament_id === 'string' && !t.contract_tournament_id.startsWith('0x')) {
+          t.contract_tournament_id = '0x' + t.contract_tournament_id;
+        }
       }
       return t;
     });
@@ -59,13 +68,12 @@ router.post('/', requireAuth, async (req, res, next) => {
     const newTournament = await db.query(
       `INSERT INTO tournaments (created_by, name, prize_pool, status, contract_tournament_id)
        VALUES ($1, $2, $3, 'created', $4)
-       RETURNING *`,
+       RETURNING *, encode(contract_tournament_id, 'hex') as contract_hex`,
       [hostId, name, prizePool, contractTournamentId]
     );
     const row = newTournament.rows[0];
-    if (Buffer.isBuffer(row.contract_tournament_id)) {
-      row.contract_tournament_id = '0x' + row.contract_tournament_id.toString('hex');
-    }
+    row.contract_tournament_id = '0x' + row.contract_hex;
+    delete row.contract_hex;
 
     res.json({ tournament: row });
   } catch (error) {
@@ -83,15 +91,14 @@ router.post('/:id/fund', requireAuth, async (req, res, next) => {
     const { txHash } = req.body;
 
     const result = await db.query(
-      `UPDATE tournaments SET status = 'open', fund_tx = $1 WHERE tournament_id = $2 RETURNING *`,
+      `UPDATE tournaments SET status = 'open', fund_tx = $1 WHERE tournament_id = $2 RETURNING *, encode(contract_tournament_id, 'hex') as contract_hex`,
       [txHash, id]
     );
 
     if (result.rows.length === 0) return res.status(404).json({ error: 'Tournament not found' });
     const row = result.rows[0];
-    if (Buffer.isBuffer(row.contract_tournament_id)) {
-      row.contract_tournament_id = '0x' + row.contract_tournament_id.toString('hex');
-    }
+    row.contract_tournament_id = '0x' + row.contract_hex;
+    delete row.contract_hex;
     res.json({ tournament: row });
   } catch (error) {
     next(error);
@@ -131,11 +138,11 @@ router.post('/:id/register', requireAuth, async (req, res, next) => {
     let updateParams;
 
     if (!tournament.player_a_id) {
-      updateQuery = `UPDATE tournaments SET player_a_id = $1 WHERE tournament_id = $2 RETURNING *`;
+      updateQuery = `UPDATE tournaments SET player_a_id = $1 WHERE tournament_id = $2 RETURNING *, encode(contract_tournament_id, 'hex') as contract_hex`;
       updateParams = [player.user_id, id];
     } else if (!tournament.player_b_id) {
       // 2nd player sets status to full
-      updateQuery = `UPDATE tournaments SET player_b_id = $1, status = 'full' WHERE tournament_id = $2 RETURNING *`;
+      updateQuery = `UPDATE tournaments SET player_b_id = $1, status = 'full' WHERE tournament_id = $2 RETURNING *, encode(contract_tournament_id, 'hex') as contract_hex`;
       updateParams = [player.user_id, id];
     } else {
       return res.status(400).json({ error: 'Tournament is full' });
@@ -143,9 +150,8 @@ router.post('/:id/register', requireAuth, async (req, res, next) => {
 
     const result = await db.query(updateQuery, updateParams);
     const row = result.rows[0];
-    if (Buffer.isBuffer(row.contract_tournament_id)) {
-      row.contract_tournament_id = '0x' + row.contract_tournament_id.toString('hex');
-    }
+    row.contract_tournament_id = '0x' + row.contract_hex;
+    delete row.contract_hex;
     res.json({ tournament: row });
   } catch (error) {
     next(error);
