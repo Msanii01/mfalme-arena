@@ -99,10 +99,15 @@ export default function ChallengeLobby() {
                 />
               </div>
 
+              {!user?.riot_puuid && (
+                <div className="alert alert-warning" style={{ marginTop: 16 }}>
+                  You must <a href="/setup" style={{textDecoration: 'underline'}}>link your Riot Account</a> to issue challenges.
+                </div>
+              )}
               <button
                 type="submit"
                 className={`btn btn-primary btn-full${creating ? ' btn-loading' : ''}`}
-                disabled={creating || !gameName || !tagLine}
+                disabled={creating || !gameName || !tagLine || !user?.riot_puuid}
               >
                 {creating ? 'Creating...' : 'Send Challenge ⚔️'}
               </button>

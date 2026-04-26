@@ -25,8 +25,8 @@ function PrivyTokenInjector() {
   return null;
 }
 
-/** Guards authenticated routes and redirects to /setup if no Riot profile */
-function ProtectedRoute({ children, requireProfile = true }) {
+/** Guards authenticated routes. Riot profile checks are handled per-page if needed. */
+function ProtectedRoute({ children, requireProfile = false }) {
   const { ready, authenticated } = usePrivy();
   const { loading, hasProfile } = useCurrentUser();
   const location = useLocation();
@@ -79,14 +79,14 @@ export default function App() {
         <Route path="/" element={authenticated ? <Navigate to="/dashboard" replace /> : <Landing />} />
         {/* requireProfile=false so un-linked users can reach setup */}
         <Route path="/setup" element={<ProtectedRoute requireProfile={false}><AccountSetup /></ProtectedRoute>} />
-        <Route path="/dashboard" element={<ProtectedRoute requireProfile={false}><Dashboard /></ProtectedRoute>} />
+        <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
         <Route path="/deposit" element={<ProtectedRoute><DepositFlow /></ProtectedRoute>} />
         <Route path="/challenge" element={<ProtectedRoute><ChallengeLobby /></ProtectedRoute>} />
         <Route path="/match/:id" element={<ProtectedRoute><MatchStatus /></ProtectedRoute>} />
         <Route path="/tournaments" element={<TournamentLobby />} />
         <Route path="/tournaments/:id" element={<TournamentDetail />} />
-        <Route path="/host" element={<ProtectedRoute requireProfile={false}><HostDashboard /></ProtectedRoute>} />
-        <Route path="/tictactoe/:id" element={<ProtectedRoute requireProfile={false}><TicTacArena /></ProtectedRoute>} />
+        <Route path="/host" element={<ProtectedRoute><HostDashboard /></ProtectedRoute>} />
+        <Route path="/tictactoe/:id" element={<ProtectedRoute><TicTacArena /></ProtectedRoute>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </>
