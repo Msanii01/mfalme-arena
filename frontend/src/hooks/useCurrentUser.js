@@ -15,7 +15,7 @@ let globalUserCache = null;
  *   hasProfile — true when the user has a riot_puuid linked
  */
 export function useCurrentUser() {
-  const { ready, authenticated } = usePrivy();
+  const { user: privyUser, ready, authenticated } = usePrivy();
   const [user, setUser]       = useState(globalUserCache);
   const [loading, setLoading] = useState(globalUserCache === null);
   const [error, setError]     = useState(null);
