@@ -22,7 +22,7 @@ export function useCurrentUser() {
 
   const fetchUser = useCallback(async (force = false) => {
     if (!ready || !authenticated) {
-      if (loading) setLoading(false);
+      setLoading(false);
       return;
     }
     
@@ -48,7 +48,7 @@ export function useCurrentUser() {
     } finally {
       setLoading(false);
     }
-  }, [ready, authenticated, loading]);
+  }, [ready, authenticated]);
 
   useEffect(() => { fetchUser(); }, [fetchUser]);
 
