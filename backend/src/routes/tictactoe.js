@@ -183,29 +183,43 @@ router.post('/:gameId/move', requireAuth, async (req, res, next) => {
       const winnerWallet = winnerWalletRes.rows[0].wallet_address;
 
       if (game.tournament_id) {
-        // Tournament settlement
-        const tRes = await db.query('SELECT contract_tournament_id FROM tournaments WHERE tournament_id = $1', [game.tournament_id]);
-        const contractId = tRes.rows[0].contract_tournament_id;
+        // Tournament settlement — use hex-encoded contract ID (not raw BYTEA)
+        const tRes = await db.query(
+          "SELECT encode(contract_tournament_id, 'hex') AS contract_id FROM tournaments WHERE tournament_id = $1",
+          [game.tournament_id]
+        );
+        const contractId = '0x' + tRes.rows[0].contract_id;
         
         console.log(`Settling tournament ${contractId} for winner ${winnerWallet}`);
         try {
-          if (!tournamentContract) throw new Error("Tournament contract not configured");
+          if (!tournamentContract) throw new Error('Tournament contract not configured');
           const tx = await tournamentContract.settle(contractId, winnerWallet);
-          await db.query(`UPDATE tournaments SET status = 'completed', winner_id = $1, settle_tx = $2 WHERE tournament_id = $3`, [winnerId, tx.hash, game.tournament_id]);
+          await tx.wait(); // wait for on-chain confirmation before updating DB
+          await db.query(
+            `UPDATE tournaments SET status = 'completed', winner_id = $1, settle_tx = $2 WHERE tournament_id = $3`,
+            [winnerId, tx.hash, game.tournament_id]
+          );
           io.to(gameId).emit('settlement_success', { txHash: tx.hash });
         } catch (e) {
           console.error('Tournament settlement failed:', e);
         }
       } else if (game.match_id) {
-        // Match settlement
-        const mRes = await db.query('SELECT contract_match_id FROM matches WHERE match_id = $1', [game.match_id]);
-        const contractId = mRes.rows[0].contract_match_id;
+        // Match settlement — use hex-encoded contract ID
+        const mRes = await db.query(
+          "SELECT encode(contract_match_id, 'hex') AS contract_id FROM matches WHERE match_id = $1",
+          [game.match_id]
+        );
+        const contractId = '0x' + mRes.rows[0].contract_id;
 
         console.log(`Settling match ${contractId} for winner ${winnerWallet}`);
         try {
-          if (!escrowContract) throw new Error("Escrow contract not configured");
+          if (!escrowContract) throw new Error('Escrow contract not configured');
           const tx = await escrowContract.settle(contractId, winnerWallet);
-          await db.query(`UPDATE matches SET status = 'completed', winner_id = $1, settle_tx = $2 WHERE match_id = $3`, [winnerId, tx.hash, game.match_id]);
+          await tx.wait(); // wait for on-chain confirmation
+          await db.query(
+            `UPDATE matches SET status = 'completed', winner_id = $1, settle_tx = $2 WHERE match_id = $3`,
+            [winnerId, tx.hash, game.match_id]
+          );
           io.to(gameId).emit('settlement_success', { txHash: tx.hash });
         } catch (e) {
           console.error('Match settlement failed:', e);
