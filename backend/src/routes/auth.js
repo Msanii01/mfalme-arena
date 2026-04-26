@@ -16,7 +16,7 @@ router.get('/me', requireAuth, async (req, res, next) => {
     const privyUserId = req.user.id;
     
     const result = await db.query(
-      'SELECT privy_user_id, wallet_address, riot_puuid, created_at FROM users WHERE privy_user_id = $1',
+      'SELECT user_id, privy_user_id, wallet_address, riot_puuid, created_at FROM users WHERE privy_user_id = $1',
       [privyUserId]
     );
 
@@ -48,7 +48,7 @@ router.post('/sync', requireAuth, async (req, res, next) => {
        VALUES ($1, $2)
        ON CONFLICT (privy_user_id) DO UPDATE 
        SET wallet_address = EXCLUDED.wallet_address
-       RETURNING privy_user_id, wallet_address, riot_puuid, created_at`,
+       RETURNING user_id, privy_user_id, wallet_address, riot_puuid, created_at`,
       [privyUserId, walletAddress]
     );
 
@@ -91,7 +91,7 @@ router.post('/link-riot', requireAuth, async (req, res, next) => {
          ON CONFLICT (privy_user_id) DO UPDATE 
          SET wallet_address = EXCLUDED.wallet_address,
              riot_puuid = EXCLUDED.riot_puuid
-         RETURNING privy_user_id, wallet_address, riot_puuid`,
+         RETURNING user_id, privy_user_id, wallet_address, riot_puuid`,
         [privyUserId, walletAddress, puuid]
       );
 
