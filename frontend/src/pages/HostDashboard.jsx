@@ -52,6 +52,15 @@ export default function HostDashboard() {
   // Find the connected external wallet (e.g. OKX, MetaMask)
   const externalWallet = wallets.find(w => w.walletClientType !== 'privy');
 
+  // Immediately prompt to switch to Base Sepolia if connected to the wrong network
+  useEffect(() => {
+    if (externalWallet && externalWallet.chainId !== 'eip155:84532') {
+      externalWallet.switchChain(84532).catch(err => {
+        console.error('Failed to switch chain on connect:', err);
+      });
+    }
+  }, [externalWallet]);
+
   const handleGenerate = async (e) => {
     e.preventDefault();
     if (!name || !prizePool) return;
@@ -71,32 +80,12 @@ export default function HostDashboard() {
       const amountRaw = parseUnits(prizePool.toString(), 6);
 
       const provider = await externalWallet.getEthereumProvider();
-
-      // Ensure network is Base Sepolia (Chain ID 84532 -> 0x14a34)
-      try {
-        await provider.request({
-          method: 'wallet_switchEthereumChain',
-          params: [{ chainId: '0x14a34' }],
-        });
-      } catch (switchError) {
-        // This error code indicates that the chain has not been added to the wallet.
-        if (switchError.code === 4902) {
-          await provider.request({
-            method: 'wallet_addEthereumChain',
-            params: [{
-              chainId: '0x14a34',
-              chainName: 'Base Sepolia',
-              rpcUrls: ['https://sepolia.base.org'],
-              nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-              blockExplorerUrls: ['https://sepolia.basescan.org']
-            }],
-          });
-        } else {
-          throw switchError;
-        }
-      }
-
       const publicClient = createPublicClient({ chain: baseSepolia, transport: http() });
+
+      // Ensure network is Base Sepolia right before execution just in case
+      if (externalWallet.chainId !== 'eip155:84532') {
+        await externalWallet.switchChain(84532);
+      }
 
       // 2. Create tournament on-chain
       const createData = encodeFunctionData({
