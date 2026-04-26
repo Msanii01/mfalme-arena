@@ -30,6 +30,7 @@ api.interceptors.request.use(async (config) => {
 // ── Auth endpoints ───────────────────────────────────────────
 export const authAPI = {
   getMe: () => api.get('/auth/me').then((r) => r.data.user),
+  syncUser: (walletAddress) => api.post('/auth/sync', { walletAddress }).then((r) => r.data.user),
 
   // Explicit-token version: bypasses the interceptor entirely.
   // Use this for critical first-login calls where the interceptor

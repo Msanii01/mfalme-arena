@@ -40,15 +40,29 @@ export function useCurrentUser() {
       setUser(data);
     } catch (err) {
       if (err.response?.status === 404) {
-        globalUserCache = null;
-        setUser(null);
+        // User not in DB. Try to sync them automatically if we have a wallet.
+        try {
+          const walletAddr = privyUser?.wallet?.address || privyUser?.linkedAccounts?.find((a) => a.type === 'wallet')?.address;
+          if (walletAddr) {
+            const syncedUser = await authAPI.syncUser(walletAddr);
+            globalUserCache = syncedUser;
+            setUser(syncedUser);
+            setError(null);
+          } else {
+            globalUserCache = null;
+            setUser(null);
+          }
+        } catch (syncErr) {
+          globalUserCache = null;
+          setUser(null);
+        }
       } else {
         setError(err.response?.data?.error || 'Failed to load profile');
       }
     } finally {
       setLoading(false);
     }
-  }, [ready, authenticated]);
+  }, [ready, authenticated, privyUser]);
 
   useEffect(() => { fetchUser(); }, [fetchUser]);
 

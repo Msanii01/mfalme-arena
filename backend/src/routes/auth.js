@@ -31,6 +31,34 @@ router.get('/me', requireAuth, async (req, res, next) => {
 });
 
 /**
+ * POST /api/auth/sync
+ * Syncs a Privy User ID & Wallet Address into the database.
+ */
+router.post('/sync', requireAuth, async (req, res, next) => {
+  try {
+    const privyUserId = req.user.id;
+    const { walletAddress } = req.body;
+
+    if (!walletAddress) {
+      return res.status(400).json({ error: 'walletAddress is required' });
+    }
+
+    const result = await db.query(
+      `INSERT INTO users (privy_user_id, wallet_address)
+       VALUES ($1, $2)
+       ON CONFLICT (privy_user_id) DO UPDATE 
+       SET wallet_address = EXCLUDED.wallet_address
+       RETURNING privy_user_id, wallet_address, riot_puuid, created_at`,
+      [privyUserId, walletAddress]
+    );
+
+    res.status(200).json({ user: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * POST /api/auth/link-riot
  * Links a Privy User ID & Wallet Address to a Riot PUUID.
  * 
