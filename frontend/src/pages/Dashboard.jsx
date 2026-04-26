@@ -1,16 +1,50 @@
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { usePrivy } from '@privy-io/react-auth';
+import { createPublicClient, http, formatUnits } from 'viem';
+import { baseSepolia } from 'viem/chains';
 import { useCurrentUser } from '../hooks/useCurrentUser.js';
 import Sidebar from '../components/Sidebar.jsx';
+
+const USDC_ADDRESS = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
+const ERC20_ABI = [
+  { inputs: [{ name: "account", type: "address" }], name: "balanceOf", outputs: [{ name: "", type: "uint256" }], type: "function" }
+];
+
+const publicClient = createPublicClient({
+  chain: baseSepolia,
+  transport: http('https://sepolia.base.org')
+});
 
 export default function Dashboard() {
   const { user: privyUser } = usePrivy();
   const { user, loading, hasProfile } = useCurrentUser();
   const navigate = useNavigate();
 
+  const [usdcBalance, setUsdcBalance] = useState('—');
+
   const walletAddress = privyUser?.wallet?.address
     || privyUser?.linkedAccounts?.find((a) => a.type === 'wallet')?.address
     || null;
+
+  useEffect(() => {
+    async function fetchBalance() {
+      if (!walletAddress) return;
+      try {
+        const balanceRaw = await publicClient.readContract({
+          address: USDC_ADDRESS,
+          abi: ERC20_ABI,
+          functionName: 'balanceOf',
+          args: [walletAddress]
+        });
+        // USDC has 6 decimals
+        setUsdcBalance(formatUnits(balanceRaw, 6));
+      } catch (err) {
+        console.error('Failed to fetch balance', err);
+      }
+    }
+    fetchBalance();
+  }, [walletAddress]);
 
   const shortAddr = walletAddress
     ? `${walletAddress.slice(0, 6)}…${walletAddress.slice(-4)}`
@@ -75,7 +109,7 @@ export default function Dashboard() {
         {/* Stats grid */}
         <div className="grid-4" style={{ marginBottom: 32 }}>
           {[
-            { label: 'USDC Balance', value: '—', sub: 'Deposit to play', icon: '💵', color: 'var(--teal)' },
+            { label: 'USDC Balance', value: usdcBalance !== '—' ? `$${usdcBalance}` : '—', sub: 'Deposit to play', icon: '💵', color: 'var(--teal)' },
             { label: 'Matches Played', value: '0', sub: 'Start your first match', icon: '⚔️', color: 'var(--gold)' },
             { label: 'Win Rate', value: '—%', sub: 'No matches yet', icon: '📈', color: 'var(--purple-light)' },
             { label: 'Total Earnings', value: '$0.00', sub: 'USDC on Base', icon: '🏆', color: 'var(--gold)' },
