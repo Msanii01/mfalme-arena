@@ -45,7 +45,7 @@ export default function TournamentLobby() {
     setProcessingId(id);
     setError(null);
     try {
-      const { game } = await tictactoeAPI.initGame(id, null);
+      const game = await tictactoeAPI.initGame(id, null);
       navigate(`/tictactoe/${game.game_id}`);
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to enter arena');
