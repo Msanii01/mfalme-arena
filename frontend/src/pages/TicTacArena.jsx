@@ -13,6 +13,7 @@ export default function TicTacArena() {
   const [game, setGame] = useState(null);
   const [socket, setSocket] = useState(null);
   const [error, setError] = useState(null);
+  const [settlementTx, setSettlementTx] = useState(null);
 
   useEffect(() => {
     // Initial fetch
@@ -32,7 +33,7 @@ export default function TicTacArena() {
 
     socketInstance.on('settlement_success', ({ txHash }) => {
       console.log('Prize settled!', txHash);
-      // Could show a notification here
+      setSettlementTx(txHash);
     });
 
     return () => {
@@ -158,6 +159,28 @@ export default function TicTacArena() {
             </div>
           </div>
         </div>
+
+        {(game.status === 'won_x' || game.status === 'won_o' || game.status === 'draw') && (
+          <div style={{ marginTop: 32, textAlign: 'center', animation: 'fadeIn 0.5s' }}>
+            {settlementTx ? (
+              <div className="alert alert-success" style={{ marginBottom: 16, display: 'inline-block', textAlign: 'left' }}>
+                <div style={{ fontWeight: 'bold', marginBottom: 4 }}>🏆 Prize Transferred On-Chain!</div>
+                <a href={`https://sepolia.basescan.org/tx/${settlementTx}`} target="_blank" rel="noreferrer" style={{ color: 'var(--gold)', textDecoration: 'underline', fontSize: 14 }}>
+                  View Receipt on Basescan ↗
+                </a>
+              </div>
+            ) : game.status !== 'draw' ? (
+              <div className="text-muted" style={{ marginBottom: 16, fontSize: 14 }}>
+                Settling smart contract prize... ⏳
+              </div>
+            ) : null}
+            <div>
+              <button className="btn btn-secondary" onClick={() => navigate('/tournaments')}>
+                Return to Tournaments
+              </button>
+            </div>
+          </div>
+        )}
       </main>
 
       <style>{`
