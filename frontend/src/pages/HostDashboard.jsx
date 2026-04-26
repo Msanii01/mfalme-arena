@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useWallets, useConnectWallet } from '@privy-io/react-auth';
-import { encodeFunctionData, parseUnits } from 'viem';
+import { encodeFunctionData, parseUnits, createPublicClient, http } from 'viem';
+import { baseSepolia } from 'viem/chains';
 import Sidebar from '../components/Sidebar.jsx';
 import { tournamentAPI } from '../services/api.js';
 import { useCurrentUser } from '../hooks/useCurrentUser.js';
@@ -71,6 +72,8 @@ export default function HostDashboard() {
 
       const provider = await externalWallet.getEthereumProvider();
 
+      const publicClient = createPublicClient({ chain: baseSepolia, transport: http() });
+
       // 2. Create tournament on-chain
       const createData = encodeFunctionData({
         abi: TOURNAMENT_ABI,
@@ -79,10 +82,12 @@ export default function HostDashboard() {
       });
 
       console.log('Sending createTournament tx...');
-      await provider.request({
+      const createTxHash = await provider.request({
         method: 'eth_sendTransaction',
         params: [{ from: externalWallet.address, to: TOURNAMENT_POOL_ADDRESS, data: createData }]
       });
+      setSuccess('Tournament created. Waiting for confirmation...');
+      await publicClient.waitForTransactionReceipt({ hash: createTxHash });
 
       // 3. Approve USDC
       const approveData = encodeFunctionData({
@@ -92,10 +97,12 @@ export default function HostDashboard() {
       });
 
       console.log('Sending USDC approve tx...');
-      await provider.request({
+      const approveTxHash = await provider.request({
         method: 'eth_sendTransaction',
         params: [{ from: externalWallet.address, to: USDC_ADDRESS, data: approveData }]
       });
+      setSuccess('USDC approved. Waiting for confirmation...');
+      await publicClient.waitForTransactionReceipt({ hash: approveTxHash });
 
       // 4. Fund tournament on-chain
       const fundData = encodeFunctionData({
@@ -109,6 +116,8 @@ export default function HostDashboard() {
         method: 'eth_sendTransaction',
         params: [{ from: externalWallet.address, to: TOURNAMENT_POOL_ADDRESS, data: fundData }]
       });
+      setSuccess('Funding sent. Waiting for confirmation...');
+      await publicClient.waitForTransactionReceipt({ hash: fundTxHash });
 
       // 5. Update backend status to Funded/Open
       await tournamentAPI.fundTournament(dbTourney.tournament_id, fundTxHash);
