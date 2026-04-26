@@ -15,10 +15,19 @@ const ESCROW_ABI = [
 ];
 
 const provider = new ethers.JsonRpcProvider(process.env.BASE_RPC_URL || 'https://sepolia.base.org');
-const oracleWallet = new ethers.Wallet(process.env.DEPLOYER_PRIVATE_KEY, provider);
+let oracleWallet, tournamentContract, escrowContract;
 
-const tournamentContract = new ethers.Contract(process.env.TOURNAMENT_CONTRACT_ADDRESS, TOURNAMENT_ABI, oracleWallet);
-const escrowContract = new ethers.Contract(process.env.ESCROW_CONTRACT_ADDRESS, ESCROW_ABI, oracleWallet);
+if (process.env.DEPLOYER_PRIVATE_KEY) {
+  oracleWallet = new ethers.Wallet(process.env.DEPLOYER_PRIVATE_KEY, provider);
+  if (process.env.TOURNAMENT_CONTRACT_ADDRESS) {
+    tournamentContract = new ethers.Contract(process.env.TOURNAMENT_CONTRACT_ADDRESS, TOURNAMENT_ABI, oracleWallet);
+  }
+  if (process.env.ESCROW_CONTRACT_ADDRESS) {
+    escrowContract = new ethers.Contract(process.env.ESCROW_CONTRACT_ADDRESS, ESCROW_ABI, oracleWallet);
+  }
+} else {
+  console.warn('⚠️ DEPLOYER_PRIVATE_KEY is missing. Smart contract settlement will be disabled.');
+}
 
 const router = express.Router();
 
@@ -180,6 +189,7 @@ router.post('/:gameId/move', requireAuth, async (req, res, next) => {
         
         console.log(`Settling tournament ${contractId} for winner ${winnerWallet}`);
         try {
+          if (!tournamentContract) throw new Error("Tournament contract not configured");
           const tx = await tournamentContract.settle(contractId, winnerWallet);
           await db.query(`UPDATE tournaments SET status = 'completed', winner_id = $1, settle_tx = $2 WHERE tournament_id = $3`, [winnerId, tx.hash, game.tournament_id]);
           io.to(gameId).emit('settlement_success', { txHash: tx.hash });
@@ -193,6 +203,7 @@ router.post('/:gameId/move', requireAuth, async (req, res, next) => {
 
         console.log(`Settling match ${contractId} for winner ${winnerWallet}`);
         try {
+          if (!escrowContract) throw new Error("Escrow contract not configured");
           const tx = await escrowContract.settle(contractId, winnerWallet);
           await db.query(`UPDATE matches SET status = 'completed', winner_id = $1, settle_tx = $2 WHERE match_id = $3`, [winnerId, tx.hash, game.match_id]);
           io.to(gameId).emit('settlement_success', { txHash: tx.hash });
