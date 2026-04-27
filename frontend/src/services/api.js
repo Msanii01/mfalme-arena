@@ -68,4 +68,9 @@ export const tictactoeAPI = {
   makeMove: (id, index) => api.post(`/tictactoe/${id}/move`, { index }).then((r) => r.data.game),
 };
 
+// ── Stats endpoints ────────────────────────────────────────────
+export const statsAPI = {
+  getMyStats: () => api.get('/stats/me').then((r) => r.data.stats),
+};
+
 export default api;

@@ -5,6 +5,7 @@ import { createPublicClient, http, formatUnits } from 'viem';
 import { baseSepolia } from 'viem/chains';
 import { useCurrentUser } from '../hooks/useCurrentUser.js';
 import Sidebar from '../components/Sidebar.jsx';
+import { statsAPI } from '../services/api.js';
 
 const USDC_ADDRESS = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const ERC20_ABI = [
@@ -22,6 +23,7 @@ export default function Dashboard() {
   const navigate = useNavigate();
 
   const [usdcBalance, setUsdcBalance] = useState('—');
+  const [stats, setStats] = useState(null);
 
   const walletAddress = privyUser?.wallet?.address
     || privyUser?.linkedAccounts?.find((a) => a.type === 'wallet')?.address
@@ -37,7 +39,6 @@ export default function Dashboard() {
           functionName: 'balanceOf',
           args: [walletAddress]
         });
-        // USDC has 6 decimals
         setUsdcBalance(formatUnits(balanceRaw, 6));
       } catch (err) {
         console.error('Failed to fetch balance', err);
@@ -45,6 +46,12 @@ export default function Dashboard() {
     }
     fetchBalance();
   }, [walletAddress]);
+
+  useEffect(() => {
+    statsAPI.getMyStats()
+      .then(s => setStats(s))
+      .catch(err => console.error('Failed to fetch stats', err));
+  }, []);
 
   const shortAddr = walletAddress
     ? `${walletAddress.slice(0, 6)}…${walletAddress.slice(-4)}`
@@ -125,10 +132,10 @@ export default function Dashboard() {
         {/* Stats grid */}
         <div className="grid-4" style={{ marginBottom: 32 }}>
           {[
-            { label: 'USDC Balance', value: usdcBalance !== '—' ? `$${usdcBalance}` : '—', sub: 'Deposit to play', icon: '💵', color: 'var(--teal)' },
-            { label: 'Matches Played', value: '0', sub: 'Start your first match', icon: '⚔️', color: 'var(--gold)' },
-            { label: 'Win Rate', value: '—%', sub: 'No matches yet', icon: '📈', color: 'var(--purple-light)' },
-            { label: 'Total Earnings', value: '$0.00', sub: 'USDC on Base', icon: '🏆', color: 'var(--gold)' },
+            { label: 'USDC Balance',   value: usdcBalance !== '—' ? `$${parseFloat(usdcBalance).toFixed(2)}` : '—', sub: 'Wallet on Base Sepolia', icon: '💵', color: 'var(--teal)' },
+            { label: 'Matches Played', value: stats ? stats.totalPlayed : '—', sub: stats?.totalPlayed === 0 ? 'Start your first match' : `${stats?.wins} wins`, icon: '⚔️', color: 'var(--gold)' },
+            { label: 'Win Rate',       value: stats?.winRate != null ? `${stats.winRate}%` : '—%', sub: stats?.totalPlayed ? `${stats.totalPlayed} games` : 'No matches yet', icon: '📈', color: 'var(--purple-light)' },
+            { label: 'Total Earnings', value: stats ? `$${parseFloat(stats.totalEarnings).toFixed(2)}` : '$0.00', sub: 'USDC on Base', icon: '🏆', color: 'var(--gold)' },
           ].map((s) => (
             <div key={s.label} className="stat-card">
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
@@ -214,24 +221,48 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Recent Matches placeholder */}
+        {/* Recent Matches */}
         <div className="card">
           <h2 className="heading" style={{ marginBottom: 24 }}>⚔️ Recent Matches</h2>
-          <div className="empty-state" style={{ padding: '32px 16px' }}>
-            <div className="empty-state-icon">🎯</div>
-            <div className="empty-state-title">No matches yet</div>
-            <p style={{ fontSize: 14 }}>
-              Deposit USDC and challenge a player to start earning.
-            </p>
-            <button
-              id="btn-first-match"
-              className="btn btn-primary btn-sm"
-              style={{ marginTop: 16 }}
-              onClick={() => navigate('/challenge')}
-            >
-              Find a Match
-            </button>
-          </div>
+          {stats?.recentGames?.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {stats.recentGames.map(g => (
+                <div key={g.game_id} style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  padding: '12px 16px', background: 'var(--bg-input)', borderRadius: 'var(--radius-md)',
+                  border: `1px solid ${g.result === 'win' ? 'var(--teal)' : g.result === 'loss' ? 'var(--danger)' : 'var(--border-default)'}`
+                }}>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 15 }}>{g.tournament_name}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                      {new Date(g.played_at).toLocaleDateString()}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                    <span style={{ color: 'var(--gold)', fontWeight: 600, fontSize: 14 }}>
+                      {parseFloat(g.prize_pool).toFixed(2)} USDC
+                    </span>
+                    <span style={{
+                      padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 700,
+                      background: g.result === 'win' ? 'rgba(0,210,163,0.15)' : g.result === 'loss' ? 'rgba(255,77,77,0.15)' : 'rgba(255,255,255,0.08)',
+                      color: g.result === 'win' ? 'var(--teal)' : g.result === 'loss' ? 'var(--danger)' : 'var(--text-muted)'
+                    }}>
+                      {g.result === 'win' ? '🏆 WIN' : g.result === 'loss' ? '💀 LOSS' : '🤝 DRAW'}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-state" style={{ padding: '32px 16px' }}>
+              <div className="empty-state-icon">🎯</div>
+              <div className="empty-state-title">No matches yet</div>
+              <p style={{ fontSize: 14 }}>Join a tournament to start building your record.</p>
+              <button id="btn-first-match" className="btn btn-primary btn-sm" style={{ marginTop: 16 }} onClick={() => navigate('/tournaments')}>
+                Find a Tournament
+              </button>
+            </div>
+          )}
         </div>
 
       </main>

@@ -92,6 +92,10 @@ app.use('/tournaments', tournamentRoutes);
 const tictactoeRoutes = require('./routes/tictactoe');
 app.use('/tictactoe', tictactoeRoutes);
 
+// Player stats
+const statsRoutes = require('./routes/stats');
+app.use('/stats', statsRoutes);
+
 // ── 404 handler ──────────────────────────────────────────────
 app.use((_req, res) => {
   res.status(404).json({ error: 'Not found', code: 'NOT_FOUND' });
