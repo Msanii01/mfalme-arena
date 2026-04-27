@@ -228,8 +228,11 @@ router.post('/:gameId/accept', requireAuth, async (req, res, next) => {
 
     await db.query('UPDATE tictactoe_games SET status = $1 WHERE game_id = $2', ['active', gameId]);
 
+    const updatedRes = await db.query('SELECT * FROM tictactoe_games WHERE game_id = $1', [gameId]);
+
     const io = getIO();
     io.to(gameId).emit('challenge_accepted', { game_id: gameId });
+    io.to(gameId).emit('game_update', updatedRes.rows[0]);
 
     res.json({ game_id: gameId, status: 'active' });
   } catch (error) {

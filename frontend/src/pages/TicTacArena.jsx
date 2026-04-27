@@ -91,6 +91,9 @@ export default function TicTacArena() {
   if (game.status === 'active') {
     statusText = isMyTurn ? 'YOUR TURN' : 'OPPONENT\'S TURN';
     statusColor = isMyTurn ? 'var(--teal)' : 'var(--text-muted)';
+  } else if (game.status === 'pending') {
+    statusText = 'WAITING FOR OPPONENT TO ACCEPT...';
+    statusColor = 'var(--gold)';
   } else if (game.status === 'won_x') {
     statusText = mySymbol === 'X' ? 'YOU WON THE BOUNTY!' : 'YOU LOST';
     statusColor = mySymbol === 'X' ? 'var(--gold)' : 'var(--danger)';
@@ -170,23 +173,29 @@ export default function TicTacArena() {
 
         {(game.status === 'won_x' || game.status === 'won_o' || game.status === 'draw') && (
           <div style={{ marginTop: 32, textAlign: 'center', animation: 'fadeIn 0.5s' }}>
-            {settlementTx ? (
-              <div className="alert alert-success" style={{ marginBottom: 16, display: 'inline-block', textAlign: 'left' }}>
-                <div style={{ fontWeight: 'bold', marginBottom: 4 }}>
-                  {settlementConfirmed ? '🏆 Prize Confirmed On-Chain!' : '⏳ Prize Transaction Submitted...'}
+            {(game.tournament_id || game.match_id) ? (
+              settlementTx ? (
+                <div className="alert alert-success" style={{ marginBottom: 16, display: 'inline-block', textAlign: 'left' }}>
+                  <div style={{ fontWeight: 'bold', marginBottom: 4 }}>
+                    {settlementConfirmed ? '🏆 Prize Confirmed On-Chain!' : '⏳ Prize Transaction Submitted...'}
+                  </div>
+                  <a href={`https://sepolia.basescan.org/tx/${settlementTx}`} target="_blank" rel="noreferrer" style={{ color: 'var(--gold)', textDecoration: 'underline', fontSize: 14 }}>
+                    {settlementConfirmed ? 'View Receipt on Basescan ↗' : 'Track on Basescan ↗'}
+                  </a>
                 </div>
-                <a href={`https://sepolia.basescan.org/tx/${settlementTx}`} target="_blank" rel="noreferrer" style={{ color: 'var(--gold)', textDecoration: 'underline', fontSize: 14 }}>
-                  {settlementConfirmed ? 'View Receipt on Basescan ↗' : 'Track on Basescan ↗'}
-                </a>
-              </div>
-            ) : game.status !== 'draw' ? (
+              ) : game.status !== 'draw' ? (
+                <div className="text-muted" style={{ marginBottom: 16, fontSize: 14 }}>
+                  Settling smart contract prize... ⏳
+                </div>
+              ) : null
+            ) : (
               <div className="text-muted" style={{ marginBottom: 16, fontSize: 14 }}>
-                Settling smart contract prize... ⏳
+                Game Over! 🤝
               </div>
-            ) : null}
+            )}
             <div>
-              <button className="btn btn-secondary" onClick={() => navigate('/tournaments')}>
-                Return to Tournaments
+              <button className="btn btn-secondary" onClick={() => navigate('/challenge')}>
+                Return to Lobby
               </button>
             </div>
           </div>
