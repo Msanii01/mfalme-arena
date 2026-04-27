@@ -21,7 +21,8 @@ router.get('/', requireAuth, async (req, res, next) => {
     const internalUserId = userRes.rows[0].user_id;
 
     const matches = await db.query(
-      `SELECT m.*, 
+      `SELECT m.*,
+              '0x' || encode(m.escrow_match_id, 'hex') as escrow_match_id,
               u1.riot_game_name as player_a_name, u1.riot_tag_line as player_a_tag, u1.wallet_address as player_a_wallet,
               u2.riot_game_name as player_b_name, u2.riot_tag_line as player_b_tag, u2.wallet_address as player_b_wallet,
               g.game_id as tictactoe_game_id
@@ -133,6 +134,7 @@ router.get('/:id', requireAuth, async (req, res, next) => {
     const { id } = req.params;
     const matchRes = await db.query(
       `SELECT m.*, 
+              '0x' || encode(m.escrow_match_id, 'hex') as escrow_match_id,
               u1.riot_game_name as player_a_name, u1.riot_tag_line as player_a_tag, u1.wallet_address as player_a_wallet,
               u2.riot_game_name as player_b_name, u2.riot_tag_line as player_b_tag, u2.wallet_address as player_b_wallet,
               g.game_id as tictactoe_game_id
