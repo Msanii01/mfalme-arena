@@ -96,6 +96,10 @@ app.use('/tictactoe', tictactoeRoutes);
 const statsRoutes = require('./routes/stats');
 app.use('/stats', statsRoutes);
 
+// Cleanup service (1-min timeout for challenges)
+const { startCleanupService } = require('./services/cleanup');
+startCleanupService();
+
 // ── 404 handler ──────────────────────────────────────────────
 app.use((_req, res) => {
   res.status(404).json({ error: 'Not found', code: 'NOT_FOUND' });
