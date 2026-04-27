@@ -170,11 +170,11 @@ export default function Dashboard() {
               {walletAddress && (
                 <button 
                   className="btn btn-ghost btn-sm" 
-                  style={{ padding: '4px 8px', marginLeft: 8 }}
+                  style={{ padding: '4px 8px', marginLeft: 8, display: 'flex', alignItems: 'center', gap: '4px' }}
                   onClick={handleCopy}
                   title="Copy Wallet Address"
                 >
-                  {copied ? '✅' : '📋'}
+                  {copied ? '✅ Copied' : '📋 Copy'}
                 </button>
               )}
             </div>
