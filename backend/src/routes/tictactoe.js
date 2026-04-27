@@ -174,36 +174,47 @@ router.post('/:gameId/move', requireAuth, async (req, res, next) => {
     const io = getIO();
     io.to(gameId).emit('game_update', game);
 
-    // If game over, trigger smart contract settlement!
-    if (newStatus === 'won_x' || newStatus === 'won_o') {
-      const winnerId = newStatus === 'won_x' ? game.player_x_id : game.player_o_id;
-      
-      // Get winner wallet address
-      const winnerWalletRes = await db.query('SELECT wallet_address FROM users WHERE user_id = $1', [winnerId]);
-      const winnerWallet = winnerWalletRes.rows[0].wallet_address;
+    // If game over, update DB immediately then attempt on-chain settlement async
+    if (newStatus === 'won_x' || newStatus === 'won_o' || newStatus === 'draw') {
+      const winnerId = newStatus === 'won_x' ? game.player_x_id : (newStatus === 'won_o' ? game.player_o_id : null);
 
       if (game.tournament_id) {
-        // Tournament settlement — use hex-encoded contract ID (not raw BYTEA)
-        const tRes = await db.query(
-          "SELECT encode(contract_tournament_id, 'hex') AS contract_id FROM tournaments WHERE tournament_id = $1",
-          [game.tournament_id]
+        // Immediately mark tournament as completed in DB — lobby will update on next poll
+        await db.query(
+          `UPDATE tournaments SET status = 'completed', winner_id = $1 WHERE tournament_id = $2`,
+          [winnerId, game.tournament_id]
         );
-        const contractId = '0x' + tRes.rows[0].contract_id;
-        
-        console.log(`Settling tournament ${contractId} for winner ${winnerWallet}`);
-        try {
-          if (!tournamentContract) throw new Error('Tournament contract not configured');
-          const tx = await tournamentContract.settle(contractId, winnerWallet);
-          // Notify clients immediately so UI shows the tx link without waiting for mining
-          io.to(gameId).emit('settlement_pending', { txHash: tx.hash });
-          await tx.wait(); // wait for on-chain confirmation before updating DB
-          await db.query(
-            `UPDATE tournaments SET status = 'completed', winner_id = $1, settle_tx = $2 WHERE tournament_id = $3`,
-            [winnerId, tx.hash, game.tournament_id]
-          );
-          io.emit('settlement_success', { txHash: tx.hash }); // broadcast globally so lobby refreshes
-        } catch (e) {
-          console.error('Tournament settlement failed:', e);
+        // Broadcast globally so lobby refreshes immediately via socket
+        io.emit('settlement_success', { txHash: null });
+
+        // Attempt on-chain settlement in the background (non-blocking)
+        if (winnerId) {
+          const winnerWalletRes = await db.query('SELECT wallet_address FROM users WHERE user_id = $1', [winnerId]);
+          const winnerWallet = winnerWalletRes.rows[0]?.wallet_address;
+
+          if (winnerWallet && tournamentContract) {
+            const tRes = await db.query(
+              "SELECT encode(contract_tournament_id, 'hex') AS contract_id FROM tournaments WHERE tournament_id = $1",
+              [game.tournament_id]
+            );
+            const contractId = '0x' + tRes.rows[0].contract_id;
+            console.log(`Settling tournament ${contractId} for winner ${winnerWallet}`);
+
+            // Fire and forget — doesn't block the response
+            tournamentContract.settle(contractId, winnerWallet)
+              .then(tx => {
+                io.to(gameId).emit('settlement_pending', { txHash: tx.hash });
+                return tx.wait().then(() => {
+                  db.query(
+                    `UPDATE tournaments SET settle_tx = $1 WHERE tournament_id = $2`,
+                    [tx.hash, game.tournament_id]
+                  );
+                  io.emit('settlement_success', { txHash: tx.hash });
+                  console.log(`Tournament ${game.tournament_id} settled on-chain: ${tx.hash}`);
+                });
+              })
+              .catch(e => console.error('Tournament on-chain settlement failed:', e));
+          }
         }
       } else if (game.match_id) {
         // Match settlement — use hex-encoded contract ID
