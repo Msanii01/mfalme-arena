@@ -204,14 +204,23 @@ export default function MatchStatus() {
             {match.status === 'accepted' && (
               <div>
                 <p style={{ marginBottom: 20 }}>Match accepted. Both players must deposit their USDC stake into the smart contract.</p>
-                <button 
-                  className={`btn btn-primary btn-lg${depositing ? ' btn-loading' : ''}`}
-                  onClick={handleDeposit}
-                  disabled={depositing}
-                >
-                  {depositing ? 'Processing via Paymaster...' : 'Deposit USDC (Gasless)'}
-                </button>
-                <p className="caption mt-4">Gas fees are sponsored by Mfalme Arena</p>
+                
+                {((isCreator && match.player_a_deposited) || (isOpponent && match.player_b_deposited)) ? (
+                  <div className="alert alert-info">
+                    <span>⏳</span> Waiting for opponent to deposit...
+                  </div>
+                ) : (
+                  <>
+                    <button 
+                      className={`btn btn-primary btn-lg${depositing ? ' btn-loading' : ''}`}
+                      onClick={handleDeposit}
+                      disabled={depositing}
+                    >
+                      {depositing ? 'Processing via Paymaster...' : 'Deposit USDC (Gasless)'}
+                    </button>
+                    <p className="caption mt-4">Gas fees are sponsored by Mfalme Arena</p>
+                  </>
+                )}
               </div>
             )}
 

@@ -23,9 +23,14 @@ router.get('/me', requireAuth, async (req, res, next) => {
     const gamesRes = await db.query(
       `SELECT g.game_id, g.status, g.board, g.created_at,
               g.player_x_id, g.player_o_id,
-              t.name as tournament_name, t.prize_pool
+              t.name as tournament_name, t.prize_pool as t_prize_pool,
+              m.stake_amount as m_stake_amount,
+              u1.wallet_address as p_a_wallet, u2.wallet_address as p_b_wallet
        FROM tictactoe_games g
        LEFT JOIN tournaments t ON g.tournament_id = t.tournament_id
+       LEFT JOIN matches m ON g.match_id = m.match_id
+       LEFT JOIN users u1 ON m.player_a_id = u1.user_id
+       LEFT JOIN users u2 ON m.player_b_id = u2.user_id
        WHERE (g.player_x_id = $1 OR g.player_o_id = $1)
          AND g.status != 'active'
        ORDER BY g.created_at DESC
@@ -43,11 +48,11 @@ router.get('/me', requireAuth, async (req, res, next) => {
 
     const winRate = totalPlayed > 0 ? Math.round((wins / totalPlayed) * 100) : null;
 
-    // Total earnings from completed tournaments won by this user
+    // Total earnings from completed tournaments AND matches won by this user
     const earningsRes = await db.query(
-      `SELECT COALESCE(SUM(prize_pool), 0) AS total
-       FROM tournaments
-       WHERE winner_id = $1 AND status = 'completed'`,
+      `SELECT 
+         (SELECT COALESCE(SUM(prize_pool), 0) FROM tournaments WHERE winner_id = $1 AND status = 'completed') +
+         (SELECT COALESCE(SUM(stake_amount * 2), 0) FROM matches WHERE winner_id = $1 AND status = 'completed') AS total`,
       [userId]
     );
     const totalEarnings = parseFloat(earningsRes.rows[0].total);
@@ -60,10 +65,22 @@ router.get('/me', requireAuth, async (req, res, next) => {
       if (g.status === 'won_x') result = mySymbol === 'X' ? 'win' : 'loss';
       else if (g.status === 'won_o') result = mySymbol === 'O' ? 'win' : 'loss';
 
+      let name = 'Practice';
+      let prize = 0;
+
+      if (g.tournament_name) {
+        name = g.tournament_name;
+        prize = g.t_prize_pool;
+      } else if (g.m_stake_amount !== null) {
+        const oppWallet = isX ? g.p_b_wallet : g.p_a_wallet;
+        name = oppWallet ? `${oppWallet.slice(0, 6)}...${oppWallet.slice(-4)}` : '1v1 Match';
+        prize = g.m_stake_amount * 2; // Winner takes all
+      }
+
       return {
         game_id: g.game_id,
-        tournament_name: g.tournament_name || 'Practice',
-        prize_pool: g.prize_pool || 0,
+        tournament_name: name,
+        prize_pool: prize,
         result,
         played_at: g.created_at,
       };

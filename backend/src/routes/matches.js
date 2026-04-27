@@ -192,24 +192,43 @@ router.post('/:id/accept', requireAuth, async (req, res, next) => {
 router.post('/:id/deposit', requireAuth, async (req, res, next) => {
   try {
     const { id } = req.params;
-    const userId = req.user.id;
+    const userRes = await db.query('SELECT user_id FROM users WHERE privy_user_id = $1', [userId]);
+    if (userRes.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    const internalUserId = userRes.rows[0].user_id;
 
-    // In a real app we'd verify the txHash against the blockchain.
-    // For this MVP, we optimistically set the status to 'active' once deposits are clicked.
-    // Assuming both players hit this route, we'll just set it to active immediately to unblock testing.
-    const matchRes = await db.query(
-      `UPDATE matches SET status = 'active' WHERE match_id = $1 RETURNING *`,
-      [id]
-    );
-    
-    const match = matchRes.rows[0];
+    // Get current match
+    const matchCheck = await db.query('SELECT * FROM matches WHERE match_id = $1', [id]);
+    if (matchCheck.rows.length === 0) return res.status(404).json({ error: 'Match not found' });
+    let currentMatch = matchCheck.rows[0];
 
-    // Also activate the Tic-Tac-Toe game if it's a TTT match
-    if (match.game_mode === 'tictactoe') {
-      await db.query(`UPDATE tictactoe_games SET status = 'active' WHERE match_id = $1`, [id]);
+    // Determine which player is depositing
+    let updateQuery = '';
+    if (currentMatch.player_a_id === internalUserId) {
+      updateQuery = `UPDATE matches SET player_a_deposited = TRUE WHERE match_id = $1 RETURNING *`;
+    } else if (currentMatch.player_b_id === internalUserId) {
+      updateQuery = `UPDATE matches SET player_b_deposited = TRUE WHERE match_id = $1 RETURNING *`;
+    } else {
+      return res.status(403).json({ error: 'Not a player in this match' });
     }
 
-    res.json({ match, message: 'Match is now active.' });
+    const matchRes = await db.query(updateQuery, [id]);
+    let match = matchRes.rows[0];
+
+    // Check if both have deposited
+    if (match.player_a_deposited && match.player_b_deposited && match.status !== 'active') {
+      const activeRes = await db.query(
+        `UPDATE matches SET status = 'active' WHERE match_id = $1 RETURNING *`,
+        [id]
+      );
+      match = activeRes.rows[0];
+
+      // Also activate the Tic-Tac-Toe game if it's a TTT match
+      if (match.game_mode === 'tictactoe') {
+        await db.query(`UPDATE tictactoe_games SET status = 'active' WHERE match_id = $1`, [id]);
+      }
+    }
+
+    res.json({ match, message: match.status === 'active' ? 'Match is now active.' : 'Deposit recorded. Waiting for opponent.' });
   } catch (error) {
     next(error);
   }
