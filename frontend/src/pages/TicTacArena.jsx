@@ -14,6 +14,7 @@ export default function TicTacArena() {
   const [socket, setSocket] = useState(null);
   const [error, setError] = useState(null);
   const [settlementTx, setSettlementTx] = useState(null);
+  const [settlementConfirmed, setSettlementConfirmed] = useState(false);
 
   useEffect(() => {
     // Initial fetch
@@ -31,9 +32,16 @@ export default function TicTacArena() {
       setGame(updatedGame);
     });
 
-    socketInstance.on('settlement_success', ({ txHash }) => {
-      console.log('Prize settled!', txHash);
+    socketInstance.on('settlement_pending', ({ txHash }) => {
+      // Show the Basescan link immediately — tx is submitted but not yet mined
       setSettlementTx(txHash);
+      setSettlementConfirmed(false);
+    });
+
+    socketInstance.on('settlement_success', ({ txHash }) => {
+      console.log('Prize confirmed on-chain!', txHash);
+      setSettlementTx(txHash);
+      setSettlementConfirmed(true);
     });
 
     return () => {
@@ -164,9 +172,11 @@ export default function TicTacArena() {
           <div style={{ marginTop: 32, textAlign: 'center', animation: 'fadeIn 0.5s' }}>
             {settlementTx ? (
               <div className="alert alert-success" style={{ marginBottom: 16, display: 'inline-block', textAlign: 'left' }}>
-                <div style={{ fontWeight: 'bold', marginBottom: 4 }}>🏆 Prize Transferred On-Chain!</div>
+                <div style={{ fontWeight: 'bold', marginBottom: 4 }}>
+                  {settlementConfirmed ? '🏆 Prize Confirmed On-Chain!' : '⏳ Prize Transaction Submitted...'}
+                </div>
                 <a href={`https://sepolia.basescan.org/tx/${settlementTx}`} target="_blank" rel="noreferrer" style={{ color: 'var(--gold)', textDecoration: 'underline', fontSize: 14 }}>
-                  View Receipt on Basescan ↗
+                  {settlementConfirmed ? 'View Receipt on Basescan ↗' : 'Track on Basescan ↗'}
                 </a>
               </div>
             ) : game.status !== 'draw' ? (

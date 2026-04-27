@@ -194,12 +194,14 @@ router.post('/:gameId/move', requireAuth, async (req, res, next) => {
         try {
           if (!tournamentContract) throw new Error('Tournament contract not configured');
           const tx = await tournamentContract.settle(contractId, winnerWallet);
+          // Notify clients immediately so UI shows the tx link without waiting for mining
+          io.to(gameId).emit('settlement_pending', { txHash: tx.hash });
           await tx.wait(); // wait for on-chain confirmation before updating DB
           await db.query(
             `UPDATE tournaments SET status = 'completed', winner_id = $1, settle_tx = $2 WHERE tournament_id = $3`,
             [winnerId, tx.hash, game.tournament_id]
           );
-          io.to(gameId).emit('settlement_success', { txHash: tx.hash });
+          io.emit('settlement_success', { txHash: tx.hash }); // broadcast globally so lobby refreshes
         } catch (e) {
           console.error('Tournament settlement failed:', e);
         }

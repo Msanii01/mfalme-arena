@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { io } from 'socket.io-client';
 import Sidebar from '../components/Sidebar.jsx';
 import { tournamentAPI, tictactoeAPI } from '../services/api.js';
 import { useCurrentUser } from '../hooks/useCurrentUser.js';
@@ -16,7 +17,7 @@ export default function TournamentLobby() {
     fetchTournaments();
   }, []);
 
-  const fetchTournaments = async () => {
+  const fetchTournaments = useCallback(async () => {
     try {
       const data = await tournamentAPI.getTournaments();
       setTournaments(data);
@@ -25,7 +26,24 @@ export default function TournamentLobby() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    fetchTournaments();
+    // Auto-poll every 15 seconds so completed tournaments disappear without manual refresh
+    const interval = setInterval(fetchTournaments, 15000);
+    return () => clearInterval(interval);
+  }, [fetchTournaments]);
+
+  // Live socket updates: refresh lobby when a tournament is settled
+  useEffect(() => {
+    const socket = io(import.meta.env.VITE_API_URL || 'http://localhost:3001');
+    socket.on('settlement_success', () => {
+      // A game just finished — refresh the tournament list
+      fetchTournaments();
+    });
+    return () => socket.disconnect();
+  }, [fetchTournaments]);
 
   const handleRegister = async (id) => {
 
@@ -84,7 +102,8 @@ export default function TournamentLobby() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
               {tournaments.map(t => {
                 const isRegistered = t.player_a_id === user?.user_id || t.player_b_id === user?.user_id;
-                const isFull = t.status === 'full' || t.status === 'active' || t.status === 'completed';
+                const isCompleted = t.status === 'completed' || t.status === 'cancelled';
+                const isMatchReady = (t.status === 'full' || t.status === 'active') && isRegistered;
                 
                 return (
                   <div key={t.tournament_id} className="card" style={{ 
@@ -94,10 +113,14 @@ export default function TournamentLobby() {
                     <div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
                         <h2 className="heading">{t.name}</h2>
-                        <span className={`badge ${t.status === 'open' ? 'badge-teal' : t.status === 'full' ? 'badge-purple' : 'badge-neutral'}`}>
+                        <span className={`badge ${
+                          t.status === 'open' ? 'badge-teal' :
+                          t.status === 'full' ? 'badge-purple' :
+                          t.status === 'completed' ? 'badge-neutral' : 'badge-neutral'
+                        }`}>
                           {t.status.toUpperCase()}
                         </span>
-                        {isRegistered && <span className="badge badge-gold">REGISTERED</span>}
+                        {isRegistered && !isCompleted && <span className="badge badge-gold">REGISTERED</span>}
                       </div>
                       
                       <div style={{ display: 'flex', gap: 24, color: 'var(--text-muted)', fontSize: 14 }}>
@@ -127,7 +150,7 @@ export default function TournamentLobby() {
                       {t.status === 'open' && isRegistered && (
                         <div className="text-gold" style={{ fontWeight: 600 }}>Waiting for opponent...</div>
                       )}
-                      {isFull && isRegistered && (
+                      {isMatchReady && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center' }}>
                           <div className="text-teal" style={{ fontWeight: 600 }}>Match Ready!</div>
                           <button 
@@ -139,8 +162,23 @@ export default function TournamentLobby() {
                           </button>
                         </div>
                       )}
-                      {isFull && !isRegistered && (
+                      {(t.status === 'full' || t.status === 'active') && !isRegistered && (
                         <button className="btn btn-ghost" disabled>Registration Closed</button>
+                      )}
+                      {isCompleted && (
+                        <div style={{ textAlign: 'center' }}>
+                          <div style={{ fontSize: 22, marginBottom: 4 }}>🏆</div>
+                          <div className="text-muted" style={{ fontSize: 13 }}>Completed</div>
+                          {t.settle_tx && (
+                            <a
+                              href={`https://sepolia.basescan.org/tx/${t.settle_tx}`}
+                              target="_blank" rel="noreferrer"
+                              style={{ fontSize: 12, color: 'var(--gold)', textDecoration: 'underline' }}
+                            >
+                              View Prize Tx ↗
+                            </a>
+                          )}
+                        </div>
                       )}
                     </div>
                   </div>
