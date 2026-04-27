@@ -17,16 +17,22 @@ const ESCROW_ABI = [
 const provider = new ethers.JsonRpcProvider(process.env.BASE_RPC_URL || 'https://sepolia.base.org');
 let oracleWallet, tournamentContract, escrowContract;
 
-if (process.env.DEPLOYER_PRIVATE_KEY) {
-  oracleWallet = new ethers.Wallet(process.env.DEPLOYER_PRIVATE_KEY, provider);
+// Oracle key: use ADMIN_PRIVATE_KEY if set (recommended), fall back to DEPLOYER_PRIVATE_KEY
+const oracleKey = process.env.ADMIN_PRIVATE_KEY || process.env.DEPLOYER_PRIVATE_KEY;
+
+if (oracleKey) {
+  oracleWallet = new ethers.Wallet(oracleKey, provider);
+  console.log(`⚙️  Oracle wallet: ${oracleWallet.address}`);
   if (process.env.TOURNAMENT_CONTRACT_ADDRESS) {
     tournamentContract = new ethers.Contract(process.env.TOURNAMENT_CONTRACT_ADDRESS, TOURNAMENT_ABI, oracleWallet);
+    console.log(`⚙️  TournamentPool: ${process.env.TOURNAMENT_CONTRACT_ADDRESS}`);
   }
   if (process.env.ESCROW_CONTRACT_ADDRESS) {
     escrowContract = new ethers.Contract(process.env.ESCROW_CONTRACT_ADDRESS, ESCROW_ABI, oracleWallet);
+    console.log(`⚙️  MatchEscrow: ${process.env.ESCROW_CONTRACT_ADDRESS}`);
   }
 } else {
-  console.warn('⚠️ DEPLOYER_PRIVATE_KEY is missing. Smart contract settlement will be disabled.');
+  console.warn('⚠️ No oracle key found (ADMIN_PRIVATE_KEY or DEPLOYER_PRIVATE_KEY). Smart contract settlement will be disabled.');
 }
 
 const router = express.Router();
