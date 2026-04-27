@@ -46,8 +46,8 @@ export const authAPI = {
 export const matchAPI = {
   getMatches: () => api.get('/matches').then((r) => r.data.matches),
   getMatch: (id) => api.get(`/matches/${id}`).then((r) => r.data.match),
-  createMatch: (opponentGameName, opponentTagLine, stakeAmount) =>
-    api.post('/matches', { opponentGameName, opponentTagLine, stakeAmount }).then((r) => r.data.match),
+  createMatch: (opponentGameName, opponentTagLine, opponentWallet, stakeAmount, gameMode) =>
+    api.post('/matches', { opponentGameName, opponentTagLine, opponentWallet, stakeAmount, gameMode }).then((r) => r.data.match),
   acceptMatch: (id) => api.post(`/matches/${id}/accept`).then((r) => r.data.match),
   markDeposited: (id) => api.post(`/matches/${id}/deposit`).then((r) => r.data.match),
 };
@@ -66,9 +66,7 @@ export const tictactoeAPI = {
   getGame: (id) => api.get(`/tictactoe/${id}`).then((r) => r.data.game),
   initGame: (tournamentId, matchId) => api.post('/tictactoe/init', { tournamentId, matchId }).then((r) => r.data.game),
   makeMove: (id, index) => api.post(`/tictactoe/${id}/move`, { index }).then((r) => r.data.game),
-  directChallenge: (opponentWallet, stakeAmount) => api.post('/tictactoe/direct-challenge', { opponentWallet, stakeAmount }).then((r) => r.data.game),
-  getMyChallenges: () => api.get('/tictactoe/my-challenges').then((r) => r.data.challenges),
-  acceptChallenge: (id) => api.post(`/tictactoe/${id}/accept`).then((r) => r.data),
+
 };
 
 // ── Stats endpoints ────────────────────────────────────────────

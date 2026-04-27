@@ -22,11 +22,13 @@ router.get('/', requireAuth, async (req, res, next) => {
 
     const matches = await db.query(
       `SELECT m.*, 
-              u1.riot_game_name as player_a_name, u1.riot_tag_line as player_a_tag,
-              u2.riot_game_name as player_b_name, u2.riot_tag_line as player_b_tag
+              u1.riot_game_name as player_a_name, u1.riot_tag_line as player_a_tag, u1.wallet_address as player_a_wallet,
+              u2.riot_game_name as player_b_name, u2.riot_tag_line as player_b_tag, u2.wallet_address as player_b_wallet,
+              g.game_id as tictactoe_game_id
        FROM matches m
        JOIN users u1 ON m.player_a_id = u1.user_id
        LEFT JOIN users u2 ON m.player_b_id = u2.user_id
+       LEFT JOIN tictactoe_games g ON m.match_id = g.match_id
        WHERE m.player_a_id = $1 OR m.player_b_id = $1
        ORDER BY m.created_at DESC`,
       [internalUserId]
@@ -45,44 +47,77 @@ router.get('/', requireAuth, async (req, res, next) => {
  */
 router.post('/', requireAuth, async (req, res, next) => {
   try {
-    const { opponentGameName, opponentTagLine, stakeAmount } = req.body;
-    if (!opponentGameName || !opponentTagLine || !stakeAmount) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    const { opponentGameName, opponentTagLine, opponentWallet, stakeAmount, gameMode } = req.body;
+    
+    if (!stakeAmount) {
+      return res.status(400).json({ error: 'Missing stake amount' });
     }
 
     const userId = req.user.id;
     
     // 1. Get creator's internal ID
-    const creatorRes = await db.query('SELECT user_id, riot_puuid FROM users WHERE privy_user_id = $1', [userId]);
-    if (creatorRes.rows.length === 0) return res.status(400).json({ error: 'Please link your Riot account first' });
+    const creatorRes = await db.query('SELECT user_id, riot_puuid, wallet_address FROM users WHERE privy_user_id = $1', [userId]);
     const creator = creatorRes.rows[0];
 
-    // 2. Fetch opponent PUUID via Riot API
-    const opponentRiot = await getAccountByRiotId(opponentGameName, opponentTagLine);
+    let opponentId;
+    let creatorPuuid = null;
+    let opponentPuuid = null;
     
-    if (opponentRiot.puuid === creator.riot_puuid) {
-      return res.status(400).json({ error: 'You cannot challenge yourself' });
-    }
+    const mode = gameMode === 'tictactoe' ? 'tictactoe' : 'lol';
 
-    // 3. Find opponent in DB
-    const opponentRes = await db.query('SELECT user_id FROM users WHERE riot_puuid = $1', [opponentRiot.puuid]);
-    if (opponentRes.rows.length === 0) {
-      return res.status(400).json({ error: 'Opponent has not registered on Mfalme Arena yet' });
+    if (mode === 'lol') {
+      if (!opponentGameName || !opponentTagLine) return res.status(400).json({ error: 'Missing Riot ID fields' });
+      if (!creator.riot_puuid) return res.status(400).json({ error: 'Please link your Riot account first' });
+      
+      const opponentRiot = await getAccountByRiotId(opponentGameName, opponentTagLine);
+      if (opponentRiot.puuid === creator.riot_puuid) {
+        return res.status(400).json({ error: 'You cannot challenge yourself' });
+      }
+
+      const opponentRes = await db.query('SELECT user_id FROM users WHERE riot_puuid = $1', [opponentRiot.puuid]);
+      if (opponentRes.rows.length === 0) {
+        return res.status(400).json({ error: 'Opponent has not registered on Mfalme Arena yet' });
+      }
+      opponentId = opponentRes.rows[0].user_id;
+      creatorPuuid = creator.riot_puuid;
+      opponentPuuid = opponentRiot.puuid;
+      
+    } else {
+      // Tic-Tac-Toe mode
+      if (!opponentWallet) return res.status(400).json({ error: 'Missing opponent wallet address' });
+      if (opponentWallet.toLowerCase() === creator.wallet_address.toLowerCase()) {
+        return res.status(400).json({ error: 'You cannot challenge yourself' });
+      }
+      const opponentRes = await db.query('SELECT user_id FROM users WHERE LOWER(wallet_address) = LOWER($1)', [opponentWallet]);
+      if (opponentRes.rows.length === 0) {
+        return res.status(400).json({ error: 'Opponent has not registered on Mfalme Arena yet' });
+      }
+      opponentId = opponentRes.rows[0].user_id;
     }
-    const opponentId = opponentRes.rows[0].user_id;
 
     // 4. Generate escrow_match_id (32 bytes hex for smart contract keccak256)
     const escrowMatchId = '0x' + crypto.randomBytes(32).toString('hex');
 
     // 5. Insert match
     const newMatch = await db.query(
-      `INSERT INTO matches (player_a_id, player_b_id, player_a_puuid, player_b_puuid, stake_amount, escrow_match_id)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO matches (player_a_id, player_b_id, player_a_puuid, player_b_puuid, stake_amount, escrow_match_id, game_mode)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
-      [creator.user_id, opponentId, creator.riot_puuid, opponentRiot.puuid, stakeAmount, escrowMatchId]
+      [creator.user_id, opponentId, creatorPuuid, opponentPuuid, stakeAmount, escrowMatchId, mode]
     );
 
-    res.json({ match: newMatch.rows[0] });
+    const matchObj = newMatch.rows[0];
+
+    // 6. If tictactoe, create the game record linked to this match
+    if (mode === 'tictactoe') {
+      await db.query(
+        `INSERT INTO tictactoe_games (match_id, player_x_id, player_o_id, status, board, turn)
+         VALUES ($1, $2, $3, 'pending', '---------', 'X')`,
+        [matchObj.match_id, creator.user_id, opponentId]
+      );
+    }
+
+    res.json({ match: matchObj });
   } catch (error) {
     if (error.status === 404) return res.status(404).json({ error: error.message });
     next(error);
@@ -98,11 +133,13 @@ router.get('/:id', requireAuth, async (req, res, next) => {
     const { id } = req.params;
     const matchRes = await db.query(
       `SELECT m.*, 
-              u1.riot_game_name as player_a_name, u1.riot_tag_line as player_a_tag,
-              u2.riot_game_name as player_b_name, u2.riot_tag_line as player_b_tag
+              u1.riot_game_name as player_a_name, u1.riot_tag_line as player_a_tag, u1.wallet_address as player_a_wallet,
+              u2.riot_game_name as player_b_name, u2.riot_tag_line as player_b_tag, u2.wallet_address as player_b_wallet,
+              g.game_id as tictactoe_game_id
        FROM matches m
        JOIN users u1 ON m.player_a_id = u1.user_id
        LEFT JOIN users u2 ON m.player_b_id = u2.user_id
+       LEFT JOIN tictactoe_games g ON m.match_id = g.match_id
        WHERE m.match_id = $1`,
       [id]
     );
@@ -159,8 +196,15 @@ router.post('/:id/deposit', requireAuth, async (req, res, next) => {
       `UPDATE matches SET status = 'active' WHERE match_id = $1 RETURNING *`,
       [id]
     );
+    
+    const match = matchRes.rows[0];
 
-    res.json({ match: matchRes.rows[0], message: 'Match is now active. Awaiting Riot results.' });
+    // Also activate the Tic-Tac-Toe game if it's a TTT match
+    if (match.game_mode === 'tictactoe') {
+      await db.query(`UPDATE tictactoe_games SET status = 'active' WHERE match_id = $1`, [id]);
+    }
+
+    res.json({ match, message: 'Match is now active.' });
   } catch (error) {
     next(error);
   }

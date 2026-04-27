@@ -110,137 +110,6 @@ router.post('/init', requireAuth, async (req, res, next) => {
   }
 });
 
-/**
- * POST /api/tictactoe/direct-challenge
- * Issue a direct Tic-Tac-Toe challenge to another player by wallet address.
- * No Riot account required.
- */
-router.post('/direct-challenge', requireAuth, async (req, res, next) => {
-  try {
-    const { opponentWallet, stakeAmount } = req.body;
-    if (!opponentWallet) return res.status(400).json({ error: 'opponentWallet is required' });
-
-    const stake = parseFloat(stakeAmount) || 0;
-
-    // Get challenger's internal ID
-    const meRes = await db.query(
-      'SELECT user_id, wallet_address FROM users WHERE privy_user_id = $1',
-      [req.user.id]
-    );
-    if (meRes.rows.length === 0) return res.status(404).json({ error: 'User not found' });
-    const challenger = meRes.rows[0];
-
-    // Find opponent by wallet address
-    const opponentRes = await db.query(
-      'SELECT user_id, wallet_address FROM users WHERE LOWER(wallet_address) = LOWER($1)',
-      [opponentWallet]
-    );
-    if (opponentRes.rows.length === 0) {
-      return res.status(404).json({ error: 'No player found with that wallet address. They must sign in to Mfalme first.' });
-    }
-    const opponent = opponentRes.rows[0];
-
-    if (challenger.user_id === opponent.user_id) {
-      return res.status(400).json({ error: 'You cannot challenge yourself' });
-    }
-
-    // Create a pending game (player_o_id set, status active when accepted)
-    const gameRes = await db.query(
-      `INSERT INTO tictactoe_games (player_x_id, player_o_id, status, board, turn)
-       VALUES ($1, $2, 'pending', '---------', 'X')
-       RETURNING *`,
-      [challenger.user_id, opponent.user_id]
-    );
-    const game = gameRes.rows[0];
-
-    // Notify opponent via socket
-    const io = getIO();
-    io.emit(`challenge_received_${opponent.user_id}`, {
-      game_id: game.game_id,
-      challenger_wallet: challenger.wallet_address,
-      stake_amount: stake,
-    });
-
-    res.json({ game, message: 'Challenge sent!' });
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * GET /api/tictactoe/my-challenges
- * Get all pending direct challenges for the current user (incoming + outgoing).
- */
-router.get('/my-challenges', requireAuth, async (req, res, next) => {
-  try {
-    const meRes = await db.query('SELECT user_id FROM users WHERE privy_user_id = $1', [req.user.id]);
-    if (meRes.rows.length === 0) return res.status(404).json({ error: 'User not found' });
-    const userId = meRes.rows[0].user_id;
-
-    const result = await db.query(
-      `SELECT g.game_id, g.status, g.created_at,
-              ux.wallet_address as challenger_wallet,
-              uo.wallet_address as opponent_wallet,
-              g.player_x_id, g.player_o_id
-       FROM tictactoe_games g
-       JOIN users ux ON g.player_x_id = ux.user_id
-       JOIN users uo ON g.player_o_id = uo.user_id
-       WHERE g.tournament_id IS NULL
-         AND g.match_id IS NULL
-         AND g.status = 'pending'
-         AND (g.player_x_id = $1 OR g.player_o_id = $1)
-       ORDER BY g.created_at DESC`,
-      [userId]
-    );
-
-    const challenges = result.rows.map(r => ({
-      ...r,
-      direction: r.player_x_id === userId ? 'outgoing' : 'incoming',
-    }));
-
-    res.json({ challenges, userId });
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * POST /api/tictactoe/:gameId/accept
- * Accept an incoming direct challenge — sets status to active.
- */
-router.post('/:gameId/accept', requireAuth, async (req, res, next) => {
-  try {
-    const { gameId } = req.params;
-    const meRes = await db.query('SELECT user_id FROM users WHERE privy_user_id = $1', [req.user.id]);
-    if (meRes.rows.length === 0) return res.status(404).json({ error: 'User not found' });
-    const userId = meRes.rows[0].user_id;
-
-    const gameRes = await db.query('SELECT * FROM tictactoe_games WHERE game_id = $1', [gameId]);
-    if (gameRes.rows.length === 0) return res.status(404).json({ error: 'Challenge not found' });
-    const game = gameRes.rows[0];
-
-    if (game.player_o_id !== userId) {
-      return res.status(403).json({ error: 'You are not the challenged player' });
-    }
-    if (game.status !== 'pending') {
-      return res.status(400).json({ error: 'Challenge is no longer pending' });
-    }
-
-    await db.query('UPDATE tictactoe_games SET status = $1 WHERE game_id = $2', ['active', gameId]);
-
-    const updatedRes = await db.query('SELECT * FROM tictactoe_games WHERE game_id = $1', [gameId]);
-
-    const io = getIO();
-    io.to(gameId).emit('challenge_accepted', { game_id: gameId });
-    io.to(gameId).emit('game_update', updatedRes.rows[0]);
-
-    res.json({ game_id: gameId, status: 'active' });
-  } catch (error) {
-    next(error);
-  }
-});
-
-
 
 /**
  * GET /api/tictactoe/:gameId
@@ -355,25 +224,68 @@ router.post('/:gameId/move', requireAuth, async (req, res, next) => {
           }
         }
       } else if (game.match_id) {
-        // Match settlement — use hex-encoded contract ID
-        const mRes = await db.query(
-          "SELECT encode(contract_match_id, 'hex') AS contract_id FROM matches WHERE match_id = $1",
-          [game.match_id]
-        );
-        const contractId = '0x' + mRes.rows[0].contract_id;
+        if (winnerId) {
+          const winnerWalletRes = await db.query('SELECT wallet_address FROM users WHERE user_id = $1', [winnerId]);
+          const winnerWallet = winnerWalletRes.rows[0]?.wallet_address;
 
-        console.log(`Settling match ${contractId} for winner ${winnerWallet}`);
-        try {
-          if (!escrowContract) throw new Error('Escrow contract not configured');
-          const tx = await escrowContract.settle(contractId, winnerWallet);
-          await tx.wait(); // wait for on-chain confirmation
-          await db.query(
-            `UPDATE matches SET status = 'completed', winner_id = $1, settle_tx = $2 WHERE match_id = $3`,
-            [winnerId, tx.hash, game.match_id]
+          if (winnerWallet) {
+            // Match settlement — use hex-encoded escrow_match_id
+            const mRes = await db.query(
+              "SELECT encode(escrow_match_id, 'hex') AS contract_id FROM matches WHERE match_id = $1",
+              [game.match_id]
+            );
+            const contractId = '0x' + mRes.rows[0].contract_id;
+
+            console.log(`Settling match ${contractId} for winner ${winnerWallet}`);
+            
+            // Mark immediately in DB
+            await db.query(
+              `UPDATE matches SET status = 'completed', winner_id = $1 WHERE match_id = $2`,
+              [winnerId, game.match_id]
+            );
+            io.emit('settlement_success', { txHash: null });
+
+            if (escrowContract) {
+              escrowContract.settle(contractId, winnerWallet)
+                .then(tx => {
+                  io.to(gameId).emit('settlement_pending', { txHash: tx.hash });
+                  return tx.wait().then(() => {
+                    db.query(
+                      `UPDATE matches SET settle_tx = $1 WHERE match_id = $2`,
+                      [tx.hash, game.match_id]
+                    );
+                    io.emit('settlement_success', { txHash: tx.hash });
+                    console.log(`Match ${game.match_id} settled on-chain: ${tx.hash}`);
+                  });
+                })
+                .catch(e => console.error('Match on-chain settlement failed:', e));
+            } else {
+              console.warn('Match ended but escrow contract not configured');
+            }
+          }
+        } else if (newStatus === 'draw') {
+          // A draw -> cancel the match to refund players
+          const mRes = await db.query(
+            "SELECT encode(escrow_match_id, 'hex') AS contract_id FROM matches WHERE match_id = $1",
+            [game.match_id]
           );
-          io.to(gameId).emit('settlement_success', { txHash: tx.hash });
-        } catch (e) {
-          console.error('Match settlement failed:', e);
+          const contractId = '0x' + mRes.rows[0].contract_id;
+          
+          await db.query(`UPDATE matches SET status = 'completed' WHERE match_id = $1`, [game.match_id]);
+          io.emit('settlement_success', { txHash: null });
+
+          if (escrowContract) {
+            escrowContract.cancel(contractId)
+              .then(tx => {
+                io.to(gameId).emit('settlement_pending', { txHash: tx.hash });
+                return tx.wait().then(() => {
+                  db.query(`UPDATE matches SET settle_tx = $1 WHERE match_id = $2`, [tx.hash, game.match_id]);
+                  io.emit('settlement_success', { txHash: tx.hash });
+                  console.log(`Match ${game.match_id} draw refunded on-chain: ${tx.hash}`);
+                });
+              })
+              .catch(e => console.error('Match draw refund failed:', e));
+          }
         }
       }
     }

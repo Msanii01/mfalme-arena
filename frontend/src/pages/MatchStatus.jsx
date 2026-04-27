@@ -158,18 +158,26 @@ export default function MatchStatus() {
             {/* Player A */}
             <div className="card card-purple">
               <div className="user-avatar" style={{ width: 80, height: 80, fontSize: 32, margin: '0 auto 16px' }}>
-                {match.player_a_name[0].toUpperCase()}
+                {match.game_mode === 'tictactoe' ? 'P1' : match.player_a_name[0].toUpperCase()}
               </div>
-              <h3 className="heading">{match.player_a_name}#{match.player_a_tag}</h3>
+              <h3 className="heading">
+                {match.game_mode === 'tictactoe' 
+                  ? `${match.player_a_wallet.slice(0, 6)}...${match.player_a_wallet.slice(-4)}` 
+                  : `${match.player_a_name}#${match.player_a_tag}`}
+              </h3>
               <p className="text-muted mt-2">Challenger</p>
             </div>
 
             {/* Player B */}
             <div className="card card-gold">
               <div className="user-avatar" style={{ width: 80, height: 80, fontSize: 32, margin: '0 auto 16px', background: 'var(--gradient-gold)' }}>
-                {match.player_b_name[0].toUpperCase()}
+                {match.game_mode === 'tictactoe' ? 'P2' : match.player_b_name[0].toUpperCase()}
               </div>
-              <h3 className="heading">{match.player_b_name}#{match.player_b_tag}</h3>
+              <h3 className="heading">
+                {match.game_mode === 'tictactoe' 
+                  ? `${match.player_b_wallet.slice(0, 6)}...${match.player_b_wallet.slice(-4)}` 
+                  : `${match.player_b_name}#${match.player_b_tag}`}
+              </h3>
               <p className="text-muted mt-2">Opponent</p>
             </div>
           </div>
@@ -211,7 +219,16 @@ export default function MatchStatus() {
               <div>
                 <div style={{ fontSize: 40, marginBottom: 16 }}>⚔️</div>
                 <h3 className="heading mb-2">Match is Live!</h3>
-                <p className="text-muted">Start your League of Legends match now. The smart contract will automatically settle when Riot reports the result.</p>
+                {match.game_mode === 'tictactoe' ? (
+                  <>
+                    <p className="text-muted" style={{ marginBottom: 24 }}>Both players have deposited. The arena is ready.</p>
+                    <button className="btn btn-primary btn-lg" onClick={() => navigate(`/tictactoe/${match.tictactoe_game_id}`)}>
+                      Enter Tic-Tac-Toe Arena ⚔️
+                    </button>
+                  </>
+                ) : (
+                  <p className="text-muted">Start your League of Legends match now. The smart contract will automatically settle when Riot reports the result.</p>
+                )}
               </div>
             )}
 
