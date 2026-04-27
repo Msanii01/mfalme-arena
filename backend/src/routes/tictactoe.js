@@ -111,6 +111,135 @@ router.post('/init', requireAuth, async (req, res, next) => {
 });
 
 /**
+ * POST /api/tictactoe/direct-challenge
+ * Issue a direct Tic-Tac-Toe challenge to another player by wallet address.
+ * No Riot account required.
+ */
+router.post('/direct-challenge', requireAuth, async (req, res, next) => {
+  try {
+    const { opponentWallet, stakeAmount } = req.body;
+    if (!opponentWallet) return res.status(400).json({ error: 'opponentWallet is required' });
+
+    const stake = parseFloat(stakeAmount) || 0;
+
+    // Get challenger's internal ID
+    const meRes = await db.query(
+      'SELECT user_id, wallet_address FROM users WHERE privy_user_id = $1',
+      [req.user.id]
+    );
+    if (meRes.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    const challenger = meRes.rows[0];
+
+    // Find opponent by wallet address
+    const opponentRes = await db.query(
+      'SELECT user_id, wallet_address FROM users WHERE LOWER(wallet_address) = LOWER($1)',
+      [opponentWallet]
+    );
+    if (opponentRes.rows.length === 0) {
+      return res.status(404).json({ error: 'No player found with that wallet address. They must sign in to Mfalme first.' });
+    }
+    const opponent = opponentRes.rows[0];
+
+    if (challenger.user_id === opponent.user_id) {
+      return res.status(400).json({ error: 'You cannot challenge yourself' });
+    }
+
+    // Create a pending game (player_o_id set, status active when accepted)
+    const gameRes = await db.query(
+      `INSERT INTO tictactoe_games (player_x_id, player_o_id, status, board, turn)
+       VALUES ($1, $2, 'pending', '---------', 'X')
+       RETURNING *`,
+      [challenger.user_id, opponent.user_id]
+    );
+    const game = gameRes.rows[0];
+
+    // Notify opponent via socket
+    const io = getIO();
+    io.emit(`challenge_received_${opponent.user_id}`, {
+      game_id: game.game_id,
+      challenger_wallet: challenger.wallet_address,
+      stake_amount: stake,
+    });
+
+    res.json({ game, message: 'Challenge sent!' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/tictactoe/my-challenges
+ * Get all pending direct challenges for the current user (incoming + outgoing).
+ */
+router.get('/my-challenges', requireAuth, async (req, res, next) => {
+  try {
+    const meRes = await db.query('SELECT user_id FROM users WHERE privy_user_id = $1', [req.user.id]);
+    if (meRes.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    const userId = meRes.rows[0].user_id;
+
+    const result = await db.query(
+      `SELECT g.game_id, g.status, g.created_at,
+              ux.wallet_address as challenger_wallet,
+              uo.wallet_address as opponent_wallet,
+              g.player_x_id, g.player_o_id
+       FROM tictactoe_games g
+       JOIN users ux ON g.player_x_id = ux.user_id
+       JOIN users uo ON g.player_o_id = uo.user_id
+       WHERE g.tournament_id IS NULL
+         AND g.match_id IS NULL
+         AND g.status = 'pending'
+         AND (g.player_x_id = $1 OR g.player_o_id = $1)
+       ORDER BY g.created_at DESC`,
+      [userId]
+    );
+
+    const challenges = result.rows.map(r => ({
+      ...r,
+      direction: r.player_x_id === userId ? 'outgoing' : 'incoming',
+    }));
+
+    res.json({ challenges, userId });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/tictactoe/:gameId/accept
+ * Accept an incoming direct challenge — sets status to active.
+ */
+router.post('/:gameId/accept', requireAuth, async (req, res, next) => {
+  try {
+    const { gameId } = req.params;
+    const meRes = await db.query('SELECT user_id FROM users WHERE privy_user_id = $1', [req.user.id]);
+    if (meRes.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    const userId = meRes.rows[0].user_id;
+
+    const gameRes = await db.query('SELECT * FROM tictactoe_games WHERE game_id = $1', [gameId]);
+    if (gameRes.rows.length === 0) return res.status(404).json({ error: 'Challenge not found' });
+    const game = gameRes.rows[0];
+
+    if (game.player_o_id !== userId) {
+      return res.status(403).json({ error: 'You are not the challenged player' });
+    }
+    if (game.status !== 'pending') {
+      return res.status(400).json({ error: 'Challenge is no longer pending' });
+    }
+
+    await db.query('UPDATE tictactoe_games SET status = $1 WHERE game_id = $2', ['active', gameId]);
+
+    const io = getIO();
+    io.to(gameId).emit('challenge_accepted', { game_id: gameId });
+
+    res.json({ game_id: gameId, status: 'active' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+
+
+/**
  * GET /api/tictactoe/:gameId
  */
 router.get('/:gameId', requireAuth, async (req, res, next) => {

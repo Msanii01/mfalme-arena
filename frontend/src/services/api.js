@@ -66,6 +66,9 @@ export const tictactoeAPI = {
   getGame: (id) => api.get(`/tictactoe/${id}`).then((r) => r.data.game),
   initGame: (tournamentId, matchId) => api.post('/tictactoe/init', { tournamentId, matchId }).then((r) => r.data.game),
   makeMove: (id, index) => api.post(`/tictactoe/${id}/move`, { index }).then((r) => r.data.game),
+  directChallenge: (opponentWallet, stakeAmount) => api.post('/tictactoe/direct-challenge', { opponentWallet, stakeAmount }).then((r) => r.data.game),
+  getMyChallenges: () => api.get('/tictactoe/my-challenges').then((r) => r.data.challenges),
+  acceptChallenge: (id) => api.post(`/tictactoe/${id}/accept`).then((r) => r.data),
 };
 
 // ── Stats endpoints ────────────────────────────────────────────
