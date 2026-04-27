@@ -24,6 +24,7 @@ export default function Dashboard() {
 
   const [usdcBalance, setUsdcBalance] = useState('—');
   const [stats, setStats] = useState(null);
+  const [copied, setCopied] = useState(false);
 
   const walletAddress = privyUser?.wallet?.address
     || privyUser?.linkedAccounts?.find((a) => a.type === 'wallet')?.address
@@ -56,6 +57,13 @@ export default function Dashboard() {
   const shortAddr = walletAddress
     ? `${walletAddress.slice(0, 6)}…${walletAddress.slice(-4)}`
     : '—';
+
+  const handleCopy = () => {
+    if (!walletAddress) return;
+    navigator.clipboard.writeText(walletAddress);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   if (loading) {
     return (
@@ -157,8 +165,18 @@ export default function Dashboard() {
               <h2 className="heading">💼 Embedded Wallet</h2>
               <span className="badge badge-purple badge-dot badge-dot-pulse">Base Sepolia</span>
             </div>
-            <div className="puuid-display" style={{ marginBottom: 16 }}>
-              {walletAddress || 'No wallet found'}
+            <div className="puuid-display" style={{ marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontFamily: 'monospace', fontSize: 13, wordBreak: 'break-all' }}>{walletAddress || 'No wallet found'}</span>
+              {walletAddress && (
+                <button 
+                  className="btn btn-ghost btn-sm" 
+                  style={{ padding: '4px 8px', marginLeft: 8 }}
+                  onClick={handleCopy}
+                  title="Copy Wallet Address"
+                >
+                  {copied ? '✅' : '📋'}
+                </button>
+              )}
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
               <button
