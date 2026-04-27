@@ -18,8 +18,7 @@ CREATE TABLE IF NOT EXISTS tictactoe_games (
 ALTER TABLE tictactoe_games 
 ADD CONSTRAINT chk_wager_link 
 CHECK (
-  (tournament_id IS NOT NULL AND match_id IS NULL) OR 
-  (match_id IS NOT NULL AND tournament_id IS NULL)
+  (tournament_id IS NULL OR match_id IS NULL)
 );
 
 -- Add updated_at trigger
