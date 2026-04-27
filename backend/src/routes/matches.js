@@ -96,18 +96,21 @@ router.post('/', requireAuth, async (req, res, next) => {
       opponentId = opponentRes.rows[0].user_id;
     }
 
-    // 4. Generate escrow_match_id (32 bytes hex for smart contract keccak256)
-    const escrowMatchId = '0x' + crypto.randomBytes(32).toString('hex');
+    // 4. Generate escrow_match_id (32 bytes hex for Postgres BYTEA)
+    const randomHex = crypto.randomBytes(32).toString('hex');
+    const escrowMatchId = '\\x' + randomHex;
 
     // 5. Insert match
     const newMatch = await db.query(
       `INSERT INTO matches (player_a_id, player_b_id, player_a_puuid, player_b_puuid, stake_amount, escrow_match_id, game_mode)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING *`,
+       RETURNING *, '0x' || encode(escrow_match_id, 'hex') as escrow_hex`,
       [creator.user_id, opponentId, creatorPuuid, opponentPuuid, stakeAmount, escrowMatchId, mode]
     );
 
     const matchObj = newMatch.rows[0];
+    matchObj.escrow_match_id = matchObj.escrow_hex;
+    delete matchObj.escrow_hex;
 
     // 6. If tictactoe, create the game record linked to this match
     if (mode === 'tictactoe') {
