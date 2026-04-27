@@ -2,12 +2,23 @@
 
 const express = require('express');
 const crypto = require('crypto');
+const { ethers } = require('ethers');
 const { requireAuth } = require('../middleware/auth');
 const db = require('../db/client');
 
 const router = express.Router();
 
-// requireAdmin removed to allow decentralized hosts
+// Oracle setup for on-chain registration
+const TOURNAMENT_ABI = [
+  { inputs: [{ name: 'tournamentId', type: 'bytes32' }, { name: 'player', type: 'address' }], name: 'register', outputs: [], type: 'function' }
+];
+const provider = new ethers.JsonRpcProvider(process.env.BASE_RPC_URL || 'https://sepolia.base.org');
+const oracleKey = process.env.ADMIN_PRIVATE_KEY || process.env.DEPLOYER_PRIVATE_KEY;
+let tournamentContract = null;
+if (oracleKey && process.env.TOURNAMENT_CONTRACT_ADDRESS) {
+  const oracleWallet = new ethers.Wallet(oracleKey, provider);
+  tournamentContract = new ethers.Contract(process.env.TOURNAMENT_CONTRACT_ADDRESS, TOURNAMENT_ABI, oracleWallet);
+}
 
 /**
  * GET /api/tournaments
@@ -115,7 +126,7 @@ router.post('/:id/register', requireAuth, async (req, res, next) => {
     const userId = req.user.id;
 
     // Get player
-    const userRes = await db.query('SELECT user_id, riot_puuid FROM users WHERE privy_user_id = $1', [userId]);
+    const userRes = await db.query('SELECT user_id, riot_puuid, wallet_address FROM users WHERE privy_user_id = $1', [userId]);
     if (userRes.rows.length === 0) return res.status(404).json({ error: 'User profile not found' });
     const player = userRes.rows[0];
 
@@ -152,6 +163,21 @@ router.post('/:id/register', requireAuth, async (req, res, next) => {
     const row = result.rows[0];
     row.contract_tournament_id = '0x' + row.contract_hex;
     delete row.contract_hex;
+
+    // Register player on-chain (fire & forget — non-blocking)
+    if (tournamentContract && player.wallet_address) {
+      const contractId = row.contract_tournament_id;
+      tournamentContract.register(contractId, player.wallet_address)
+        .then(tx => {
+          console.log(`On-chain register tx: ${tx.hash} for player ${player.wallet_address}`);
+          return tx.wait();
+        })
+        .then(() => console.log(`Player ${player.wallet_address} registered on-chain for tournament ${id}`))
+        .catch(err => console.error('On-chain register failed (non-fatal):', err.message));
+    } else {
+      console.warn('Skipping on-chain register: oracle not configured or player has no wallet_address');
+    }
+
     res.json({ tournament: row });
   } catch (error) {
     next(error);
