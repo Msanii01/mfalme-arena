@@ -64,8 +64,12 @@ export default function HostDashboard() {
   const handleGenerate = async (e) => {
     e.preventDefault();
     if (!name || !prizePool) return;
-    if (!externalWallet) {
-      setError('Please connect your admin wallet first.');
+    
+    const smartWallet = wallets.find((w) => w.walletClientType === 'smart_wallet');
+    const wallet = smartWallet || wallets.find(w => w.walletClientType !== 'privy');
+
+    if (!wallet) {
+      setError('Please connect a wallet first.');
       return;
     }
 
@@ -79,69 +83,102 @@ export default function HostDashboard() {
       const contractId = dbTourney.contract_tournament_id; // bytes32 hex
       const amountRaw = parseUnits(prizePool.toString(), 6);
 
-      const provider = await externalWallet.getEthereumProvider();
-      const publicClient = createPublicClient({ chain: baseSepolia, transport: http() });
+      const provider = await wallet.getEthereumProvider();
 
-      // Ensure network is Base Sepolia right before execution just in case
-      if (externalWallet.chainId !== 'eip155:84532') {
-        await externalWallet.switchChain(84532);
+      // Ensure network is Base Sepolia
+      if (wallet.chainId !== 'eip155:84532') {
+        await wallet.switchChain(84532);
       }
 
-      // 2. Create tournament on-chain
+      // 1. Create tournament data
       const createData = encodeFunctionData({
         abi: TOURNAMENT_ABI,
         functionName: 'createTournament',
         args: [contractId, amountRaw]
       });
 
-      console.log('Sending createTournament tx...');
-      const createTxHash = await provider.request({
-        method: 'eth_sendTransaction',
-        params: [{ from: externalWallet.address, to: TOURNAMENT_POOL_ADDRESS, data: createData }]
-      });
-      setSuccess('Tournament created. Waiting for confirmation...');
-      await publicClient.waitForTransactionReceipt({ hash: createTxHash });
-
-      // 3. Approve USDC
+      // 2. Approve USDC data
       const approveData = encodeFunctionData({
         abi: ERC20_ABI,
         functionName: 'approve',
         args: [TOURNAMENT_POOL_ADDRESS, amountRaw]
       });
 
-      console.log('Sending USDC approve tx...');
-      const approveTxHash = await provider.request({
-        method: 'eth_sendTransaction',
-        params: [{ from: externalWallet.address, to: USDC_ADDRESS, data: approveData }]
-      });
-      setSuccess('USDC approved. Waiting for confirmation...');
-      await publicClient.waitForTransactionReceipt({ hash: approveTxHash });
-
-      // 4. Fund tournament on-chain
+      // 3. Fund tournament data
       const fundData = encodeFunctionData({
         abi: TOURNAMENT_ABI,
         functionName: 'fundTournament',
         args: [contractId]
       });
 
-      console.log('Sending fundTournament tx...');
-      const fundTxHash = await provider.request({
-        method: 'eth_sendTransaction',
-        params: [{ from: externalWallet.address, to: TOURNAMENT_POOL_ADDRESS, data: fundData }]
-      });
-      setSuccess('Funding sent. Waiting for confirmation...');
-      await publicClient.waitForTransactionReceipt({ hash: fundTxHash });
+      console.log('Initiating tournament creation & funding...');
 
-      // 5. Update backend status to Funded/Open
-      await tournamentAPI.fundTournament(dbTourney.tournament_id, fundTxHash);
+      if (wallet.walletClientType === 'smart_wallet') {
+        console.log('Sending batched UserOperation via Paymaster...');
+        
+        await provider.request({
+          method: 'wallet_sendCalls',
+          params: [{
+            version: '1',
+            chainId: `0x${(84532).toString(16)}`,
+            from: wallet.address,
+            calls: [
+              { to: TOURNAMENT_POOL_ADDRESS, data: createData, value: '0x0' },
+              { to: USDC_ADDRESS, data: approveData, value: '0x0' },
+              { to: TOURNAMENT_POOL_ADDRESS, data: fundData, value: '0x0' }
+            ],
+            capabilities: {
+              paymasterService: {
+                url: import.meta.env.VITE_BUNDLER_RPC_URL
+              }
+            }
+          }]
+        });
+        
+        setSuccess('Tournament successfully created and funded!');
+      } else {
+        // Sequential fallback for EOAs (requires gas)
+        const publicClient = createPublicClient({ chain: baseSepolia, transport: http() });
+        
+        console.log('Sending sequential transactions (Standard Wallet)...');
+        
+        const createTx = await provider.request({
+          method: 'eth_sendTransaction',
+          params: [{ from: wallet.address, to: TOURNAMENT_POOL_ADDRESS, data: createData }]
+        });
+        setSuccess('Creating tournament on-chain...');
+        await publicClient.waitForTransactionReceipt({ hash: createTx });
+
+        const approveTx = await provider.request({
+          method: 'eth_sendTransaction',
+          params: [{ from: wallet.address, to: USDC_ADDRESS, data: approveData }]
+        });
+        setSuccess('Approving USDC...');
+        await publicClient.waitForTransactionReceipt({ hash: approveTx });
+
+        const fundTx = await provider.request({
+          method: 'eth_sendTransaction',
+          params: [{ from: wallet.address, to: TOURNAMENT_POOL_ADDRESS, data: fundData }]
+        });
+        setSuccess('Funding tournament...');
+        await publicClient.waitForTransactionReceipt({ hash: fundTx });
+        
+        setSuccess('Tournament successfully created and funded!');
+      }
+
+      // Update backend status
+      await tournamentAPI.fundTournament(dbTourney.tournament_id, 'batch-completed');
       
-      setSuccess('Tournament successfully created and funded!');
       setName('');
       fetchTournaments();
 
     } catch (err) {
-      console.error(err);
-      setError(err.response?.data?.error || err.message || 'Failed to generate tournament');
+      console.error('Tournament creation error:', err);
+      if (err.message?.includes('insufficient funds')) {
+        setError('Insufficient gas funds. Please ensure the Paymaster is configured or add ETH to your wallet.');
+      } else {
+        setError(err.response?.data?.error || err.message || 'Failed to generate tournament');
+      }
     } finally {
       setProcessing(false);
     }
