@@ -50,7 +50,8 @@ ReactDOM.createRoot(document.getElementById('root')).render(
           embeddedWallets: { createOnLogin: 'users-without-wallets' },
           smartWallets: {
             createOnLogin: 'all-users',
-            requireSponsorship: true
+            requireSponsorship: true,
+            paymasterUrl: import.meta.env.VITE_BUNDLER_RPC_URL
           },
           defaultChain: baseSepolia,
           supportedChains: [baseSepolia],

@@ -56,9 +56,12 @@ export default function MatchStatus() {
   };
 
   const handleDeposit = async () => {
-    const wallet = wallets[0];
+    // Specifically look for the Smart Wallet to enable gas sponsorship
+    const smartWallet = wallets.find((w) => w.walletClientType === 'smart_wallet');
+    const wallet = smartWallet || wallets[0];
+
     if (!wallet) {
-      setError('No wallet connected');
+      setError('No wallet connected. Please log in.');
       return;
     }
 
@@ -67,10 +70,6 @@ export default function MatchStatus() {
 
     try {
       const amountRaw = parseUnits(match.stake_amount.toString(), 6);
-
-      // We attempt to send a batched UserOperation for gasless UX (Smart Wallets)
-      // or sequential transactions if using standard EOA.
-      // With Privy Smart Wallets (Account Abstraction), we can get an Ethereum provider.
       const provider = await wallet.getEthereumProvider();
 
       // 1. Approve USDC
@@ -87,35 +86,56 @@ export default function MatchStatus() {
         args: [match.escrow_match_id, wallet.address, amountRaw]
       });
 
-      console.log('Sending transaction... Gas is sponsored by Account Abstraction.');
-      
-      // If the wallet supports EIP-5792 (batching) it will batch them gas-free.
-      // Otherwise we prompt sequentially. For MVP, we just prompt sequentially.
-      await provider.request({
-        method: 'eth_sendTransaction',
-        params: [{
-          from: wallet.address,
-          to: USDC_ADDRESS,
-          data: approveData
-        }]
-      });
+      console.log('Initiating deposit...');
 
-      await provider.request({
-        method: 'eth_sendTransaction',
-        params: [{
-          from: wallet.address,
-          to: ESCROW_ADDRESS,
-          data: depositData
-        }]
-      });
+      // If using Smart Wallet, we can batch these into a single sponsored UserOperation
+      if (wallet.walletClientType === 'smart_wallet') {
+        console.log('Sending batched UserOperation via Paymaster...');
+        
+        await provider.request({
+          method: 'wallet_sendCalls',
+          params: [{
+            version: '1',
+            chainId: `0x${(84532).toString(16)}`,
+            from: wallet.address,
+            calls: [
+              { to: USDC_ADDRESS, data: approveData, value: '0x0' },
+              { to: ESCROW_ADDRESS, data: depositData, value: '0x0' }
+            ],
+            capabilities: {
+              paymasterService: {
+                url: import.meta.env.VITE_BUNDLER_RPC_URL
+              }
+            }
+          }]
+        });
+      } else {
+        // Fallback for standard wallets (requires gas)
+        console.log('Sending sequential transactions (Standard Wallet)...');
+        
+        await provider.request({
+          method: 'eth_sendTransaction',
+          params: [{ from: wallet.address, to: USDC_ADDRESS, data: approveData }]
+        });
+
+        await provider.request({
+          method: 'eth_sendTransaction',
+          params: [{ from: wallet.address, to: ESCROW_ADDRESS, data: depositData }]
+        });
+      }
 
       // Mark as deposited on backend
       await matchAPI.markDeposited(id);
       fetchMatch();
       
     } catch (err) {
-      console.error(err);
-      setError(err.message || 'Deposit failed');
+      console.error('Deposit error:', err);
+      // Better error message for common gas issues
+      if (err.message?.includes('insufficient funds')) {
+        setError('Insufficient gas funds. Please ensure the Paymaster is configured or add ETH to your wallet.');
+      } else {
+        setError(err.message || 'Deposit failed');
+      }
     } finally {
       setDepositing(false);
     }
