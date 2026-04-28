@@ -17,10 +17,10 @@ const startCleanupService = () => {
   // Run every 30 seconds to be precise enough for a 1-minute timeout
   setInterval(async () => {
     try {
-      // Find matches that are still pending and older than 1 minute
+      // Find matches that are still pending or accepted but with no deposits, older than 1 minute
       const expiredMatches = await db.query(
         `SELECT match_id FROM matches 
-         WHERE status = 'pending' 
+         WHERE (status = 'pending' OR (status = 'accepted' AND player_a_deposited = FALSE AND player_b_deposited = FALSE))
          AND created_at < NOW() - INTERVAL '1 minute'`
       );
 
