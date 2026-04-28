@@ -7,7 +7,7 @@ import { matchAPI } from '../services/api.js';
 import { useCurrentUser } from '../hooks/useCurrentUser.js';
 
 // USDC on Base Sepolia
-const USDC_ADDRESS = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
+const USDC_ADDRESS = import.meta.env.VITE_USDC_CONTRACT_ADDRESS || '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const ESCROW_ADDRESS = import.meta.env.VITE_ESCROW_CONTRACT_ADDRESS || '0x8EcFA38a99e69950eEb54EEDAE12df4F4DEC713A';
 
 const ERC20_ABI = [

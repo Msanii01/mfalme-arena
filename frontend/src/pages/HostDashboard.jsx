@@ -8,7 +8,7 @@ import { tournamentAPI } from '../services/api.js';
 import { useCurrentUser } from '../hooks/useCurrentUser.js';
 
 // Base Sepolia Addresses
-const USDC_ADDRESS = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
+const USDC_ADDRESS = import.meta.env.VITE_USDC_CONTRACT_ADDRESS || '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const TOURNAMENT_POOL_ADDRESS = import.meta.env.VITE_TOURNAMENT_CONTRACT_ADDRESS || '0x81D9859248489e73ccF00845EF3Bc7E2B59FC9f8';
 
 const ERC20_ABI = [

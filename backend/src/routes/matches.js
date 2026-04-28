@@ -192,6 +192,7 @@ router.post('/:id/accept', requireAuth, async (req, res, next) => {
 router.post('/:id/deposit', requireAuth, async (req, res, next) => {
   try {
     const { id } = req.params;
+    const userId = req.user.id;
     const userRes = await db.query('SELECT user_id FROM users WHERE privy_user_id = $1', [userId]);
     if (userRes.rows.length === 0) return res.status(404).json({ error: 'User not found' });
     const internalUserId = userRes.rows[0].user_id;
