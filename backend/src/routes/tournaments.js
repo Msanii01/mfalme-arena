@@ -5,19 +5,17 @@ const crypto = require('crypto');
 const { ethers } = require('ethers');
 const { requireAuth } = require('../middleware/auth');
 const db = require('../db/client');
+const {
+  getProvider,
+  getTournamentContract,
+  TOURNAMENT_ABI,
+} = require('../services/oracle');
 
 const router = express.Router();
 
-// Oracle setup for on-chain registration
-const TOURNAMENT_ABI = [
-  { inputs: [{ name: 'tournamentId', type: 'bytes32' }, { name: 'player', type: 'address' }], name: 'register', outputs: [], type: 'function' }
-];
-const provider = new ethers.JsonRpcProvider(process.env.BASE_RPC_URL || 'https://sepolia.base.org');
-const oracleKey = process.env.ADMIN_PRIVATE_KEY || process.env.DEPLOYER_PRIVATE_KEY;
-let tournamentContract = null;
-if (oracleKey && process.env.TOURNAMENT_CONTRACT_ADDRESS) {
-  const oracleWallet = new ethers.Wallet(oracleKey, provider);
-  tournamentContract = new ethers.Contract(process.env.TOURNAMENT_CONTRACT_ADDRESS, TOURNAMENT_ABI, oracleWallet);
+// Lazy handle to the oracle-signed TournamentPool contract (used for `register`).
+function tournamentContract() {
+  return getTournamentContract();
 }
 
 /**
@@ -27,7 +25,7 @@ if (oracleKey && process.env.TOURNAMENT_CONTRACT_ADDRESS) {
 router.get('/', requireAuth, async (req, res, next) => {
   try {
     const result = await db.query(
-      `SELECT t.*, 
+      `SELECT t.*,
               u1.riot_game_name as player_a_name, u1.riot_tag_line as player_a_tag,
               u2.riot_game_name as player_b_name, u2.riot_tag_line as player_b_tag
        FROM tournaments t
@@ -37,7 +35,7 @@ router.get('/', requireAuth, async (req, res, next) => {
        ORDER BY t.created_at DESC`
     );
     const tournaments = result.rows.map(t => {
-      // Postgres encode(..., 'hex') would be better, but since it's a SELECT *, 
+      // Postgres encode(..., 'hex') would be better, but since it's a SELECT *,
       // let's handle the object if pg already parsed it into a Buffer or JSON-like object
       if (t.contract_tournament_id) {
         if (Buffer.isBuffer(t.contract_tournament_id)) {
@@ -94,19 +92,107 @@ router.post('/', requireAuth, async (req, res, next) => {
 
 /**
  * POST /api/tournaments/:id/fund
- * Mark tournament as funded (Host)
+ * Mark tournament as funded (Host).
+ *
+ * Verifies:
+ *   1. Caller is the tournament's `created_by`.
+ *   2. The supplied `txHash` corresponds to a successful tx whose `to` is the
+ *      configured TournamentPool contract.
+ *   3. The receipt contains a `TournamentFunded(bytes32 indexed tournamentId, ...)`
+ *      log whose tournamentId matches this row's contract_tournament_id.
+ *
+ * Without these checks, any auth'd user could move any tournament to `open`
+ * by passing any string as txHash.
  */
 router.post('/:id/fund', requireAuth, async (req, res, next) => {
   try {
     const { id } = req.params;
     const { txHash } = req.body;
 
+    if (!txHash || typeof txHash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
+      return res.status(400).json({ error: 'Invalid or missing txHash' });
+    }
+
+    // (a) Fetch tournament + verify caller is the host
+    const userRes = await db.query('SELECT user_id FROM users WHERE privy_user_id = $1', [req.user.id]);
+    if (userRes.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    const callerInternalId = userRes.rows[0].user_id;
+
+    const tRes = await db.query(
+      `SELECT *, encode(contract_tournament_id, 'hex') as contract_hex
+       FROM tournaments WHERE tournament_id = $1`,
+      [id]
+    );
+    if (tRes.rows.length === 0) return res.status(404).json({ error: 'Tournament not found' });
+    const tournament = tRes.rows[0];
+
+    if (tournament.created_by !== callerInternalId) {
+      return res.status(403).json({ error: 'Only the tournament host can fund' });
+    }
+
+    if (tournament.status !== 'created') {
+      return res.status(400).json({ error: `Tournament cannot be funded from status='${tournament.status}'` });
+    }
+
+    const expectedContract = process.env.TOURNAMENT_CONTRACT_ADDRESS;
+    if (!expectedContract) {
+      return res.status(500).json({ error: 'Server misconfigured: TOURNAMENT_CONTRACT_ADDRESS not set' });
+    }
+
+    // (b) Verify the on-chain tx
+    const provider = getProvider();
+    const receipt = await provider.getTransactionReceipt(txHash);
+    if (!receipt) {
+      return res.status(400).json({ error: 'Transaction receipt not found (not mined yet?)' });
+    }
+    if (receipt.status !== 1) {
+      return res.status(400).json({ error: 'Transaction failed on-chain' });
+    }
+    if (!receipt.to || receipt.to.toLowerCase() !== expectedContract.toLowerCase()) {
+      return res.status(400).json({ error: 'Transaction was not sent to the TournamentPool contract' });
+    }
+
+    // Decode logs to find TournamentFunded(tournamentId, amount)
+    const iface = new ethers.Interface(TOURNAMENT_ABI);
+    const expectedTopic = ethers.id('TournamentFunded(bytes32,uint256)');
+    const expectedTournamentIdHex = '0x' + tournament.contract_hex;
+
+    let foundFundedEvent = false;
+    for (const log of receipt.logs) {
+      if (!log.topics || log.topics.length === 0) continue;
+      if (log.address.toLowerCase() !== expectedContract.toLowerCase()) continue;
+      if (log.topics[0] !== expectedTopic) continue;
+      try {
+        const parsed = iface.parseLog({ topics: log.topics, data: log.data });
+        if (!parsed) continue;
+        const emittedId = parsed.args.tournamentId;
+        if (typeof emittedId === 'string' && emittedId.toLowerCase() === expectedTournamentIdHex.toLowerCase()) {
+          foundFundedEvent = true;
+          break;
+        }
+      } catch (_e) {
+        // Not the event we want — keep scanning.
+      }
+    }
+
+    if (!foundFundedEvent) {
+      return res.status(400).json({ error: 'TournamentFunded event for this tournament not found in transaction' });
+    }
+
+    // (c) Persist transition. Guard `status='created'` to keep this idempotent
+    // even if two clients race the same valid txHash.
     const result = await db.query(
-      `UPDATE tournaments SET status = 'open', fund_tx = $1 WHERE tournament_id = $2 RETURNING *, encode(contract_tournament_id, 'hex') as contract_hex`,
+      `UPDATE tournaments
+       SET status = 'open', fund_tx = $1
+       WHERE tournament_id = $2 AND status = 'created'
+       RETURNING *, encode(contract_tournament_id, 'hex') as contract_hex`,
       [txHash, id]
     );
 
-    if (result.rows.length === 0) return res.status(404).json({ error: 'Tournament not found' });
+    if (result.rows.length === 0) {
+      return res.status(409).json({ error: 'Tournament status changed concurrently' });
+    }
+
     const row = result.rows[0];
     row.contract_tournament_id = '0x' + row.contract_hex;
     delete row.contract_hex;
@@ -118,56 +204,84 @@ router.post('/:id/fund', requireAuth, async (req, res, next) => {
 
 /**
  * POST /api/tournaments/:id/register
- * Register a player for an open tournament
+ * Register a player for an open tournament.
+ *
+ * Implementation note: previously this used a SELECT-then-conditional-UPDATE
+ * pattern, which is non-atomic — two concurrent requests could both observe
+ * an empty slot and both write. We collapse this into a single UPDATE that
+ * fills only an empty slot, and rely on RETURNING to determine which slot
+ * (if any) the caller actually claimed.
  */
 router.post('/:id/register', requireAuth, async (req, res, next) => {
   try {
     const { id } = req.params;
     const userId = req.user.id;
 
-    // Get player
-    const userRes = await db.query('SELECT user_id, riot_puuid, wallet_address FROM users WHERE privy_user_id = $1', [userId]);
+    const userRes = await db.query(
+      'SELECT user_id, riot_puuid, wallet_address FROM users WHERE privy_user_id = $1',
+      [userId]
+    );
     if (userRes.rows.length === 0) return res.status(404).json({ error: 'User profile not found' });
     const player = userRes.rows[0];
 
     // Riot linking is no longer required for tournaments (Tic Tac Toe MVP)
 
-    // Get tournament
-    const tourneyRes = await db.query('SELECT * FROM tournaments WHERE tournament_id = $1', [id]);
-    if (tourneyRes.rows.length === 0) return res.status(404).json({ error: 'Tournament not found' });
-    const tournament = tourneyRes.rows[0];
+    // Atomic claim: take slot A if empty; else take slot B if empty AND not the
+    // same player as A; flip status to 'full' iff slot B is being filled.
+    // The WHERE clause guarantees we only touch rows that actually have
+    // capacity for this player.
+    const updateRes = await db.query(
+      `UPDATE tournaments
+         SET player_a_id = COALESCE(player_a_id, $1),
+             player_b_id = CASE
+               WHEN player_a_id IS NOT NULL AND player_a_id <> $1 AND player_b_id IS NULL
+                 THEN $1
+               ELSE player_b_id
+             END,
+             status = CASE
+               WHEN player_a_id IS NOT NULL AND player_a_id <> $1 AND player_b_id IS NULL
+                 THEN 'full'::tournament_status
+               ELSE status
+             END
+       WHERE tournament_id = $2
+         AND status = 'open'
+         AND (
+              player_a_id IS NULL
+              OR (player_b_id IS NULL AND player_a_id <> $1)
+         )
+       RETURNING *, encode(contract_tournament_id, 'hex') as contract_hex`,
+      [player.user_id, id]
+    );
 
-    if (tournament.status !== 'open') {
-      return res.status(400).json({ error: 'Tournament is not open for registration' });
-    }
-    if (tournament.player_a_id === player.user_id || tournament.player_b_id === player.user_id) {
-      return res.status(400).json({ error: 'You are already registered' });
-    }
-
-    // Assign player
-    let updateQuery;
-    let updateParams;
-
-    if (!tournament.player_a_id) {
-      updateQuery = `UPDATE tournaments SET player_a_id = $1 WHERE tournament_id = $2 RETURNING *, encode(contract_tournament_id, 'hex') as contract_hex`;
-      updateParams = [player.user_id, id];
-    } else if (!tournament.player_b_id) {
-      // 2nd player sets status to full
-      updateQuery = `UPDATE tournaments SET player_b_id = $1, status = 'full' WHERE tournament_id = $2 RETURNING *, encode(contract_tournament_id, 'hex') as contract_hex`;
-      updateParams = [player.user_id, id];
-    } else {
+    if (updateRes.rows.length === 0) {
+      // Either the tournament doesn't exist, isn't 'open', is full, or this
+      // user is already registered. Disambiguate with a follow-up read.
+      const existing = await db.query(
+        `SELECT status, player_a_id, player_b_id FROM tournaments WHERE tournament_id = $1`,
+        [id]
+      );
+      if (existing.rows.length === 0) {
+        return res.status(404).json({ error: 'Tournament not found' });
+      }
+      const t = existing.rows[0];
+      if (t.player_a_id === player.user_id || t.player_b_id === player.user_id) {
+        return res.status(400).json({ error: 'You are already registered' });
+      }
+      if (t.status !== 'open') {
+        return res.status(400).json({ error: `Tournament is not open (status='${t.status}')` });
+      }
       return res.status(400).json({ error: 'Tournament is full' });
     }
 
-    const result = await db.query(updateQuery, updateParams);
-    const row = result.rows[0];
+    const row = updateRes.rows[0];
     row.contract_tournament_id = '0x' + row.contract_hex;
     delete row.contract_hex;
 
     // Register player on-chain (fire & forget — non-blocking)
-    if (tournamentContract && player.wallet_address) {
+    const tc = tournamentContract();
+    if (tc && player.wallet_address) {
       const contractId = row.contract_tournament_id;
-      tournamentContract.register(contractId, player.wallet_address)
+      tc.register(contractId, player.wallet_address)
         .then(tx => {
           console.log(`On-chain register tx: ${tx.hash} for player ${player.wallet_address}`);
           return tx.wait();

@@ -1,14 +1,18 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { usePrivy, useWallets } from '@privy-io/react-auth';
-import { encodeFunctionData, parseUnits } from 'viem';
+import { encodeFunctionData, parseUnits, createPublicClient, http } from 'viem';
+import { baseSepolia } from 'viem/chains';
 import Sidebar from '../components/Sidebar.jsx';
 import { matchAPI } from '../services/api.js';
 import { useCurrentUser } from '../hooks/useCurrentUser.js';
-
-// USDC on Base Sepolia
-const USDC_ADDRESS = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
-const ESCROW_ADDRESS = import.meta.env.VITE_ESCROW_CONTRACT_ADDRESS || '0x8EcFA38a99e69950eEb54EEDAE12df4F4DEC713A';
+import {
+  USDC_ADDRESS,
+  ESCROW_ADDRESS,
+  BUNDLER_RPC_URL,
+  CHAIN_ID,
+  CHAIN_ID_HEX,
+} from '../config/contracts.js';
 
 const ERC20_ABI = [
   { inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }], name: "approve", outputs: [{ name: "", type: "bool" }], type: "function" }
@@ -18,44 +22,156 @@ const ESCROW_ABI = [
   { inputs: [{ name: "matchId", type: "bytes32" }, { name: "player", type: "address" }, { name: "amount", type: "uint256" }], name: "deposit", outputs: [], type: "function" }
 ];
 
+const pendingTxKey = (matchId) => `mfalme_pending_tx_${matchId}`;
+
+// M4: Map raw RPC/wallet errors to a short user-friendly string. Keep raw
+// details in dev console only.
+function formatTxError(err) {
+  const msg = (err?.message || '').toLowerCase();
+  if (msg.includes('user rejected') || msg.includes('user denied')) {
+    return 'Transaction cancelled';
+  }
+  if (msg.includes('insufficient funds')) {
+    return 'Insufficient ETH for gas (or USDC for stake)';
+  }
+  if (msg.includes('paymaster')) {
+    return 'Sponsorship unavailable, please try again';
+  }
+  return 'Transaction failed. Please try again.';
+}
+
+// Poll EIP-5792 wallet_getCallsStatus until CONFIRMED. Returns the receipts.
+async function waitForCallsConfirmed(provider, bundleId, { intervalMs = 2000, timeoutMs = 180000 } = {}) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const result = await provider.request({
+      method: 'wallet_getCallsStatus',
+      params: [bundleId],
+    });
+    // EIP-5792 status: "PENDING" | "CONFIRMED" — some wallets use numeric codes (1 pending, 200 confirmed)
+    const status = result?.status;
+    const isConfirmed =
+      status === 'CONFIRMED' ||
+      status === 'confirmed' ||
+      status === 200 ||
+      ((result?.receipts?.length > 0) && (status === undefined || status === null));
+    if (isConfirmed && result?.receipts?.length > 0) {
+      return result;
+    }
+    if (status === 'FAILED' || status === 'failed' || status >= 400) {
+      throw new Error(`Bundle failed (status=${status})`);
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  throw new Error('Timed out waiting for bundle confirmation');
+}
+
 export default function MatchStatus() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { user } = useCurrentUser();
+  const { authenticated } = usePrivy();
   const { wallets } = useWallets();
   const [match, setMatch] = useState(null);
   const [loading, setLoading] = useState(true);
   const [depositing, setDepositing] = useState(false);
+  const [accepting, setAccepting] = useState(false);
   const [error, setError] = useState(null);
+  const unmountedRef = useRef(false);
+  const intervalRef = useRef(null);
 
+  // Poll every 5s until either the component unmounts or match.status === 'completed'.
   useEffect(() => {
+    unmountedRef.current = false;
     fetchMatch();
-    const interval = setInterval(fetchMatch, 5000);
-    return () => clearInterval(interval);
+    intervalRef.current = setInterval(() => {
+      if (unmountedRef.current) return;
+      fetchMatch();
+    }, 5000);
+    return () => {
+      unmountedRef.current = true;
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  // Stop polling once the match is settled.
+  useEffect(() => {
+    if (match?.status === 'completed' && intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+  }, [match?.status]);
+
+  // On mount, see if there's a persisted pending UserOp for this match and resume polling.
+  useEffect(() => {
+    const raw = localStorage.getItem(pendingTxKey(id));
+    if (!raw) return;
+    let parsed;
+    try { parsed = JSON.parse(raw); } catch { localStorage.removeItem(pendingTxKey(id)); return; }
+    if (!parsed?.bundleId) { localStorage.removeItem(pendingTxKey(id)); return; }
+
+    (async () => {
+      try {
+        const smartWallet = wallets.find((w) => w.walletClientType === 'smart_wallet');
+        const wallet = smartWallet || wallets[0];
+        if (!wallet) return;
+        const provider = await wallet.getEthereumProvider();
+        await waitForCallsConfirmed(provider, parsed.bundleId);
+        await matchAPI.markDeposited(id);
+        localStorage.removeItem(pendingTxKey(id));
+        if (!unmountedRef.current) fetchMatch();
+      } catch (err) {
+        // M3: don't dump full error objects in prod (may include URLs / addresses).
+        if (import.meta.env.DEV) {
+          console.error('Resumed bundle polling failed:', err);
+        } else {
+          console.error('Resumed bundle polling failed:', err?.message);
+        }
+        // Leave the entry so a subsequent reload can try again or be cleared by user action.
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, wallets.length]);
 
   const fetchMatch = async () => {
     try {
       const data = await matchAPI.getMatch(id);
+      if (unmountedRef.current) return;
       setMatch(data);
     } catch (err) {
-      console.error(err);
+      // M3: don't log full axios error in prod.
+      console.error('fetchMatch failed', err?.response?.status, err?.message);
+      if (unmountedRef.current) return;
       if (err.response?.status === 404) navigate('/challenge', { replace: true });
     } finally {
-      setLoading(false);
+      if (!unmountedRef.current) setLoading(false);
     }
   };
 
   const handleAccept = async () => {
+    if (accepting) return;
+    setAccepting(true);
+    setError(null);
     try {
       await matchAPI.acceptMatch(id);
       fetchMatch();
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to accept match');
+    } finally {
+      setAccepting(false);
     }
   };
 
   const handleDeposit = async () => {
+    if (!authenticated) {
+      setError('Reconnect to continue');
+      return;
+    }
+
     // Specifically look for the Smart Wallet to enable gas sponsorship
     const smartWallet = wallets.find((w) => w.walletClientType === 'smart_wallet');
     const wallet = smartWallet || wallets[0];
@@ -72,6 +188,11 @@ export default function MatchStatus() {
       const amountRaw = parseUnits(match.stake_amount.toString(), 6);
       const provider = await wallet.getEthereumProvider();
 
+      // Ensure network is Base Sepolia (mirrors HostDashboard)
+      if (wallet.chainId !== `eip155:${CHAIN_ID}`) {
+        await wallet.switchChain(CHAIN_ID);
+      }
+
       // 1. Approve USDC
       const approveData = encodeFunctionData({
         abi: ERC20_ABI,
@@ -86,56 +207,82 @@ export default function MatchStatus() {
         args: [match.escrow_match_id, wallet.address, amountRaw]
       });
 
-      console.log('Initiating deposit...');
+      if (import.meta.env.DEV) console.log('Initiating deposit...');
 
-      // If using Smart Wallet, we can batch these into a single sponsored UserOperation
+      // Re-check auth right before signing
+      if (!authenticated) {
+        setError('Reconnect to continue');
+        setDepositing(false);
+        return;
+      }
+
+      // If using Smart Wallet, batch into a single sponsored UserOperation
       if (wallet.walletClientType === 'smart_wallet') {
-        console.log('Sending batched UserOperation via Paymaster...');
-        
-        await provider.request({
+        if (import.meta.env.DEV) console.log('Sending batched UserOperation via Paymaster...');
+
+        const sendCallsResult = await provider.request({
           method: 'wallet_sendCalls',
           params: [{
             version: '1',
-            chainId: `0x${(84532).toString(16)}`,
+            chainId: CHAIN_ID_HEX,
             from: wallet.address,
             calls: [
               { to: USDC_ADDRESS, data: approveData, value: '0x0' },
               { to: ESCROW_ADDRESS, data: depositData, value: '0x0' }
             ],
             capabilities: {
-              paymasterService: {
-                url: import.meta.env.VITE_BUNDLER_RPC_URL
-              }
+              paymasterService: { url: BUNDLER_RPC_URL }
             }
           }]
         });
+        // EIP-5792 wallets vary: some return a string, others return { id: ... }
+        const bundleId = typeof sendCallsResult === 'string' ? sendCallsResult : sendCallsResult?.id;
+        if (!bundleId) throw new Error('wallet_sendCalls returned no bundle id');
+
+        // Persist pending tx so we can resume polling across reloads
+        try {
+          localStorage.setItem(pendingTxKey(id), JSON.stringify({
+            matchId: id,
+            bundleId,
+            type: 'deposit',
+            timestamp: Date.now(),
+          }));
+        } catch (_) { /* localStorage may be unavailable */ }
+
+        // Poll until the bundler confirms the UserOp
+        await waitForCallsConfirmed(provider, bundleId);
       } else {
-        // Fallback for standard wallets (requires gas)
-        console.log('Sending sequential transactions (Standard Wallet)...');
-        
-        await provider.request({
+        // Fallback for standard wallets (requires gas) — wait for each receipt.
+        if (import.meta.env.DEV) console.log('Sending sequential transactions (Standard Wallet)...');
+        const publicClient = createPublicClient({ chain: baseSepolia, transport: http() });
+
+        const approveTx = await provider.request({
           method: 'eth_sendTransaction',
           params: [{ from: wallet.address, to: USDC_ADDRESS, data: approveData }]
         });
+        await publicClient.waitForTransactionReceipt({ hash: approveTx });
 
-        await provider.request({
+        const depositTx = await provider.request({
           method: 'eth_sendTransaction',
           params: [{ from: wallet.address, to: ESCROW_ADDRESS, data: depositData }]
         });
+        await publicClient.waitForTransactionReceipt({ hash: depositTx });
       }
 
-      // Mark as deposited on backend
+      // Mark as deposited on backend (only after on-chain confirmation)
       await matchAPI.markDeposited(id);
+      try { localStorage.removeItem(pendingTxKey(id)); } catch (_) { /* noop */ }
       fetchMatch();
-      
+
     } catch (err) {
-      console.error('Deposit error:', err);
-      // Better error message for common gas issues
-      if (err.message?.includes('insufficient funds')) {
-        setError('Insufficient gas funds. Please ensure the Paymaster is configured or add ETH to your wallet.');
+      // M3: only dump the full error in dev; in prod log just the message.
+      if (import.meta.env.DEV) {
+        console.error('Deposit error:', err);
       } else {
-        setError(err.message || 'Deposit failed');
+        console.error('Deposit error:', err?.message);
       }
+      // M4: map common RPC error messages to a user-friendly string.
+      setError(formatTxError(err));
     } finally {
       setDepositing(false);
     }
@@ -161,7 +308,7 @@ export default function MatchStatus() {
     <div className="app-layout">
       <Sidebar />
       <main className="main-content" style={{ animation: 'fadeIn 0.3s ease-out' }}>
-        
+
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 40 }}>
           <button className="btn btn-ghost btn-sm" onClick={() => navigate('/challenge')}>← Back to Lobby</button>
           {getStatusBadge()}
@@ -178,12 +325,14 @@ export default function MatchStatus() {
             {/* Player A */}
             <div className="card card-purple">
               <div className="user-avatar" style={{ width: 80, height: 80, fontSize: 32, margin: '0 auto 16px' }}>
-                {match.game_mode === 'tictactoe' ? 'P1' : match.player_a_name[0].toUpperCase()}
+                {match.game_mode === 'tictactoe' ? 'P1' : (match.player_a_name?.[0]?.toUpperCase() ?? '?')}
               </div>
               <h3 className="heading">
-                {match.game_mode === 'tictactoe' 
-                  ? `${match.player_a_wallet.slice(0, 6)}...${match.player_a_wallet.slice(-4)}` 
-                  : `${match.player_a_name}#${match.player_a_tag}`}
+                {match.game_mode === 'tictactoe'
+                  ? (match.player_a_wallet
+                      ? `${match.player_a_wallet.slice(0, 6)}...${match.player_a_wallet.slice(-4)}`
+                      : 'Unknown')
+                  : `${match.player_a_name ?? '?'}#${match.player_a_tag ?? '?'}`}
               </h3>
               <p className="text-muted mt-2">Challenger</p>
             </div>
@@ -191,12 +340,14 @@ export default function MatchStatus() {
             {/* Player B */}
             <div className="card card-gold">
               <div className="user-avatar" style={{ width: 80, height: 80, fontSize: 32, margin: '0 auto 16px', background: 'var(--gradient-gold)' }}>
-                {match.game_mode === 'tictactoe' ? 'P2' : match.player_b_name[0].toUpperCase()}
+                {match.game_mode === 'tictactoe' ? 'P2' : (match.player_b_name?.[0]?.toUpperCase() ?? '?')}
               </div>
               <h3 className="heading">
-                {match.game_mode === 'tictactoe' 
-                  ? `${match.player_b_wallet.slice(0, 6)}...${match.player_b_wallet.slice(-4)}` 
-                  : `${match.player_b_name}#${match.player_b_tag}`}
+                {match.game_mode === 'tictactoe'
+                  ? (match.player_b_wallet
+                      ? `${match.player_b_wallet.slice(0, 6)}...${match.player_b_wallet.slice(-4)}`
+                      : 'Unknown')
+                  : `${match.player_b_name ?? '?'}#${match.player_b_tag ?? '?'}`}
               </h3>
               <p className="text-muted mt-2">Opponent</p>
             </div>
@@ -213,10 +364,16 @@ export default function MatchStatus() {
             {match.status === 'pending' && isOpponent && (
               <div>
                 <p style={{ marginBottom: 20 }}>You have been challenged. Accept to proceed to the escrow phase.</p>
-                <button className="btn btn-primary btn-lg" onClick={handleAccept}>Accept Challenge</button>
+                <button
+                  className={`btn btn-primary btn-lg${accepting ? ' btn-loading' : ''}`}
+                  onClick={handleAccept}
+                  disabled={accepting}
+                >
+                  {accepting ? 'Accepting…' : 'Accept Challenge'}
+                </button>
               </div>
             )}
-            
+
             {match.status === 'pending' && isCreator && (
               <p className="text-muted">Waiting for opponent to accept...</p>
             )}
@@ -224,14 +381,14 @@ export default function MatchStatus() {
             {match.status === 'accepted' && (
               <div>
                 <p style={{ marginBottom: 20 }}>Match accepted. Both players must deposit their USDC stake into the smart contract.</p>
-                
+
                 {((isCreator && match.player_a_deposited) || (isOpponent && match.player_b_deposited)) ? (
                   <div className="alert alert-info">
                     <span>⏳</span> Waiting for opponent to deposit...
                   </div>
                 ) : (
                   <>
-                    <button 
+                    <button
                       className={`btn btn-primary btn-lg${depositing ? ' btn-loading' : ''}`}
                       onClick={handleDeposit}
                       disabled={depositing}

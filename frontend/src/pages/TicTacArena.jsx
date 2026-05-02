@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
+import { usePrivy } from '@privy-io/react-auth';
 import { tictactoeAPI } from '../services/api';
 import { useCurrentUser } from '../hooks/useCurrentUser';
 import Sidebar from '../components/Sidebar';
@@ -9,12 +10,21 @@ export default function TicTacArena() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { user, loading } = useCurrentUser();
-  
+  const { ready, authenticated, getAccessToken } = usePrivy();
+
   const [game, setGame] = useState(null);
   const [socket, setSocket] = useState(null);
   const [error, setError] = useState(null);
   const [settlementTx, setSettlementTx] = useState(null);
   const [settlementConfirmed, setSettlementConfirmed] = useState(false);
+
+  // M1: Track optimistic-move state so socket updates can't clobber a fresh
+  // local move. `optimisticTsRef` is the timestamp of the last optimistic
+  // mutation; `inFlightRef` is true while a makeMove call is awaiting the
+  // server response. Socket updates older than the optimistic window are
+  // ignored.
+  const optimisticTsRef = useRef(0);
+  const inFlightRef = useRef(false);
 
   useEffect(() => {
     // Initial fetch
@@ -22,13 +32,40 @@ export default function TicTacArena() {
       .then(g => setGame(g))
       .catch(err => setError(err.response?.data?.error || err.message));
 
-    // Socket connect
-    const socketInstance = io(import.meta.env.VITE_API_URL || 'http://localhost:3001');
+    if (!ready || !authenticated) return undefined;
+
+    // Socket connect — token resolved on every (re)connect via async auth callback.
+    const socketInstance = io(import.meta.env.VITE_API_URL || 'http://localhost:3001', {
+      auth: async (cb) => {
+        try {
+          const token = await getAccessToken();
+          cb({ token: token || '' });
+        } catch (e) {
+          cb({ token: '' });
+        }
+      },
+    });
     setSocket(socketInstance);
 
-    socketInstance.emit('join_game', id);
+    socketInstance.on('connect', () => {
+      // join_game must wait for connection so the server-side auth has run.
+      socketInstance.emit('join_game', id);
+    });
+    socketInstance.on('connect_error', (err) => {
+      if (import.meta.env.DEV) console.warn('Game socket auth failed:', err?.message);
+      setError('Cannot reach game server (auth). Try refreshing.');
+    });
 
     socketInstance.on('game_update', (updatedGame) => {
+      // Block socket replacement during the in-flight move window so a stale
+      // pre-move broadcast can't overwrite our optimistic state.
+      if (inFlightRef.current) return;
+      // If the socket update was generated before our last optimistic write
+      // (with a small 1s grace), drop it; the server's ack will reconcile.
+      const updatedAtMs = updatedGame?.updated_at
+        ? new Date(updatedGame.updated_at).getTime()
+        : 0;
+      if (updatedAtMs && updatedAtMs < optimisticTsRef.current - 1000) return;
       setGame(updatedGame);
     });
 
@@ -39,7 +76,7 @@ export default function TicTacArena() {
     });
 
     socketInstance.on('settlement_success', ({ txHash }) => {
-      console.log('Prize confirmed on-chain!', txHash);
+      if (import.meta.env.DEV) console.log('Prize confirmed on-chain!', txHash);
       setSettlementTx(txHash);
       setSettlementConfirmed(true);
     });
@@ -47,7 +84,7 @@ export default function TicTacArena() {
     return () => {
       socketInstance.disconnect();
     };
-  }, [id]);
+  }, [id, ready, authenticated, getAccessToken]);
 
   const handleCellClick = async (index) => {
     if (!game || game.status !== 'active') return;
@@ -55,18 +92,25 @@ export default function TicTacArena() {
 
     const mySymbol = game.player_x_id === user?.user_id ? 'X' : (game.player_o_id === user?.user_id ? 'O' : null);
     if (game.turn !== mySymbol) return;
+    if (inFlightRef.current) return;
 
     try {
+      inFlightRef.current = true;
+      optimisticTsRef.current = Date.now();
       // Optimistic update
       const newBoard = game.board.split('');
       newBoard[index] = mySymbol;
       setGame({ ...game, board: newBoard.join(''), turn: mySymbol === 'X' ? 'O' : 'X' });
-      
-      await tictactoeAPI.makeMove(id, index);
+
+      const serverGame = await tictactoeAPI.makeMove(id, index);
+      // Reconcile fully with the authoritative server state.
+      if (serverGame) setGame(serverGame);
     } catch (err) {
       setError(err.response?.data?.error || err.message);
       // Re-fetch to correct optimistic UI
-      tictactoeAPI.getGame(id).then(g => setGame(g));
+      tictactoeAPI.getGame(id).then(g => setGame(g)).catch(() => {});
+    } finally {
+      inFlightRef.current = false;
     }
   };
 
@@ -132,28 +176,39 @@ export default function TicTacArena() {
           padding: 8,
           borderRadius: 12
         }}>
-          {game.board.split('').map((cell, idx) => (
-            <div
-              key={idx}
-              onClick={() => handleCellClick(idx)}
-              style={{
-                background: 'var(--bg-card)',
-                borderRadius: 8,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: 48,
-                fontWeight: 'bold',
-                color: cell === 'X' ? 'var(--gold)' : (cell === 'O' ? 'var(--purple-light)' : 'transparent'),
-                cursor: (isMyTurn && cell === '-') ? 'pointer' : 'default',
-                transition: 'all 0.2s',
-                boxShadow: (isMyTurn && cell === '-') ? 'inset 0 0 10px rgba(255,255,255,0.05)' : 'none'
-              }}
-              className={(isMyTurn && cell === '-') ? 'hover-glow' : ''}
-            >
-              {cell === '-' ? '' : cell}
-            </div>
-          ))}
+          {game.board.split('').map((cell, idx) => {
+            const row = Math.floor(idx / 3);
+            const col = idx % 3;
+            const cellState = cell === '-' ? 'empty' : cell;
+            const interactive = isMyTurn && cell === '-';
+            return (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => handleCellClick(idx)}
+                disabled={!interactive}
+                aria-label={`cell ${row} ${col}, ${cellState}`}
+                style={{
+                  background: 'var(--bg-card)',
+                  border: 'none',
+                  borderRadius: 8,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 48,
+                  fontWeight: 'bold',
+                  color: cell === 'X' ? 'var(--gold)' : (cell === 'O' ? 'var(--purple-light)' : 'transparent'),
+                  cursor: interactive ? 'pointer' : 'default',
+                  transition: 'all 0.2s',
+                  boxShadow: interactive ? 'inset 0 0 10px rgba(255,255,255,0.05)' : 'none',
+                  padding: 0,
+                }}
+                className={interactive ? 'hover-glow' : ''}
+              >
+                {cell === '-' ? '' : cell}
+              </button>
+            );
+          })}
         </div>
 
         <div style={{ marginTop: 40, display: 'flex', gap: 20 }}>

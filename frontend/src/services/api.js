@@ -30,15 +30,23 @@ api.interceptors.request.use(async (config) => {
 // ── Auth endpoints ───────────────────────────────────────────
 export const authAPI = {
   getMe: () => api.get('/auth/me').then((r) => r.data.user),
-  syncUser: (walletAddress) => api.post('/auth/sync', { walletAddress }).then((r) => r.data.user),
+  syncUser: () => api.post('/auth/sync', {}).then((r) => r.data.user),
 
-  // Explicit-token version: bypasses the interceptor entirely.
-  // Use this for critical first-login calls where the interceptor
-  // may not have received the token getter yet.
-  linkRiot: (gameName, tagLine, walletAddress, token) =>
+  // Riot ownership-verification flow:
+  //   1) startRiotLink(...) → returns { attemptId, targetIconId, ... }
+  //   2) UI tells the user to set their profile icon to targetIconId in-game.
+  //   3) verifyRiotLink(attemptId) → re-checks the icon and finalizes the link.
+  startRiotLink: (gameName, tagLine, platform, token) =>
     api.post(
-      '/auth/link-riot',
-      { gameName, tagLine, walletAddress },
+      '/auth/link-riot/start',
+      { gameName, tagLine, platform },
+      token ? { headers: { Authorization: `Bearer ${token}` } } : {}
+    ).then((r) => r.data),
+
+  verifyRiotLink: (attemptId, token) =>
+    api.post(
+      '/auth/link-riot/verify',
+      { attemptId },
       token ? { headers: { Authorization: `Bearer ${token}` } } : {}
     ).then((r) => r.data),
 };

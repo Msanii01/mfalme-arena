@@ -30,8 +30,10 @@ async function main() {
   console.log('USDC:', usdcAddress);
   console.log('Oracle (backend wallet):', oracleAddress);
 
+  const platformFeePercent = 5;
+
   const Escrow = await ethers.getContractFactory('MatchEscrow');
-  const escrow = await Escrow.deploy(usdcAddress, oracleAddress);
+  const escrow = await Escrow.deploy(usdcAddress, oracleAddress, platformFeePercent);
   await escrow.waitForDeployment();
   const escrowAddress = await escrow.getAddress();
 

@@ -6,11 +6,33 @@ import { baseSepolia } from 'viem/chains';
 import { useCurrentUser } from '../hooks/useCurrentUser.js';
 import Sidebar from '../components/Sidebar.jsx';
 import { statsAPI } from '../services/api.js';
+import { USDC_ADDRESS } from '../config/contracts.js';
 
-const USDC_ADDRESS = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const ERC20_ABI = [
   { inputs: [{ name: "account", type: "address" }], name: "balanceOf", outputs: [{ name: "", type: "uint256" }], type: "function" }
 ];
+
+const USD_FORMATTER = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  minimumFractionDigits: 2,
+});
+
+// Format a numeric balance string for display. Sub-cent positive balances
+// collapse to "<$0.01" so we don't misleadingly show $0.00.
+function formatUsd(rawBalance) {
+  const n = parseFloat(rawBalance);
+  if (!Number.isFinite(n)) return '—';
+  if (n > 0 && n < 0.01) return '<$0.01';
+  return USD_FORMATTER.format(n);
+}
+
+// Truncate a PUUID for UI display (privacy + readability). Falls back to a
+// single em-dash when missing.
+function truncatePuuid(p) {
+  if (!p || typeof p !== 'string' || p.length < 12) return p || '—';
+  return `${p.slice(0, 6)}…${p.slice(-4)}`;
+}
 
 const publicClient = createPublicClient({
   chain: baseSepolia,
@@ -42,7 +64,8 @@ export default function Dashboard() {
         });
         setUsdcBalance(formatUnits(balanceRaw, 6));
       } catch (err) {
-        console.error('Failed to fetch balance', err);
+        // M2: don't dump full axios/RPC error objects (URLs, tokens, etc).
+        console.error('Failed to fetch balance', err?.response?.status, err?.message);
       }
     }
     fetchBalance();
@@ -51,7 +74,7 @@ export default function Dashboard() {
   useEffect(() => {
     statsAPI.getMyStats()
       .then(s => setStats(s))
-      .catch(err => console.error('Failed to fetch stats', err));
+      .catch(err => console.error('Failed to fetch stats', err?.response?.status, err?.message));
   }, []);
 
   const shortAddr = walletAddress
@@ -101,7 +124,15 @@ export default function Dashboard() {
 
         <div className="grid-3" style={{ marginBottom: 32 }}>
           {/* Riot CTA */}
-          <div className="card card-gold" style={{ cursor: 'pointer' }} onClick={() => navigate('/setup')}>
+          <div
+            className="card card-gold"
+            role="button"
+            tabIndex={0}
+            aria-label={hasProfile ? 'Manage Riot account' : 'Link Riot account'}
+            style={{ cursor: 'pointer' }}
+            onClick={() => navigate('/setup')}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate('/setup'); } }}
+          >
             <div style={{ fontSize: 32, marginBottom: 12 }}>🎮</div>
             <div className="heading">Link Riot Account</div>
             <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginTop: 4, marginBottom: 16 }}>
@@ -113,7 +144,15 @@ export default function Dashboard() {
           </div>
 
           {/* Tournament CTA */}
-          <div className="card card-purple" style={{ cursor: 'pointer' }} onClick={() => navigate('/tournaments')}>
+          <div
+            className="card card-purple"
+            role="button"
+            tabIndex={0}
+            aria-label="Join a tournament"
+            style={{ cursor: 'pointer' }}
+            onClick={() => navigate('/tournaments')}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate('/tournaments'); } }}
+          >
             <div style={{ fontSize: 32, marginBottom: 12 }}>🏆</div>
             <div className="heading">Join Tournament</div>
             <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginTop: 4, marginBottom: 16 }}>
@@ -125,7 +164,15 @@ export default function Dashboard() {
           </div>
 
           {/* Host CTA */}
-          <div className="card" style={{ cursor: 'pointer', border: '1px solid var(--teal)' }} onClick={() => navigate('/host')}>
+          <div
+            className="card"
+            role="button"
+            tabIndex={0}
+            aria-label="Open host dashboard"
+            style={{ cursor: 'pointer', border: '1px solid var(--teal)' }}
+            onClick={() => navigate('/host')}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate('/host'); } }}
+          >
             <div style={{ fontSize: 32, marginBottom: 12 }}>👑</div>
             <div className="heading">Become a Host</div>
             <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginTop: 4, marginBottom: 16 }}>
@@ -140,10 +187,10 @@ export default function Dashboard() {
         {/* Stats grid */}
         <div className="grid-4" style={{ marginBottom: 32 }}>
           {[
-            { label: 'USDC Balance',   value: usdcBalance !== '—' ? `$${parseFloat(usdcBalance).toFixed(2)}` : '—', sub: 'Wallet on Base Sepolia', icon: '💵', color: 'var(--teal)' },
+            { label: 'USDC Balance',   value: usdcBalance !== '—' ? formatUsd(usdcBalance) : '—', sub: 'Wallet on Base Sepolia', icon: '💵', color: 'var(--teal)' },
             { label: 'Matches Played', value: stats ? stats.totalPlayed : '—', sub: stats?.totalPlayed === 0 ? 'Start your first match' : `${stats?.wins} wins`, icon: '⚔️', color: 'var(--gold)' },
             { label: 'Win Rate',       value: stats?.winRate != null ? `${stats.winRate}%` : '—%', sub: stats?.totalPlayed ? `${stats.totalPlayed} games` : 'No matches yet', icon: '📈', color: 'var(--purple-light)' },
-            { label: 'Total Earnings', value: stats ? `$${parseFloat(stats.totalEarnings).toFixed(2)}` : '$0.00', sub: 'USDC on Base', icon: '🏆', color: 'var(--gold)' },
+            { label: 'Total Earnings', value: stats ? formatUsd(stats.totalEarnings) : '$0.00', sub: 'USDC on Base', icon: '🏆', color: 'var(--gold)' },
           ].map((s) => (
             <div key={s.label} className="stat-card">
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
@@ -168,24 +215,18 @@ export default function Dashboard() {
             <div className="puuid-display" style={{ marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span style={{ fontFamily: 'monospace', fontSize: 13, wordBreak: 'break-all' }}>{walletAddress || 'No wallet found'}</span>
               {walletAddress && (
-                <button 
-                  className="btn btn-ghost btn-sm" 
+                <button
+                  className="btn btn-ghost btn-sm"
                   style={{ padding: '4px 8px', marginLeft: 8, display: 'flex', alignItems: 'center', gap: '4px' }}
                   onClick={handleCopy}
                   title="Copy Wallet Address"
+                  aria-label="Copy wallet address"
                 >
                   {copied ? '✅ Copied' : '📋 Copy'}
                 </button>
               )}
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
-              <button
-                id="btn-deposit"
-                className="btn btn-secondary btn-sm"
-                onClick={() => navigate('/deposit')}
-              >
-                💰 Deposit USDC
-              </button>
               {walletAddress && (
                 <a
                   href={`https://sepolia.basescan.org/address/${walletAddress}`}
@@ -211,8 +252,12 @@ export default function Dashboard() {
 
             {hasProfile ? (
               <div>
-                <div className="puuid-display" style={{ marginBottom: 16, fontSize: 11 }}>
-                  PUUID: {user.riot_puuid}
+                <div
+                  className="puuid-display"
+                  style={{ marginBottom: 16, fontSize: 11 }}
+                  title={user.riot_puuid}
+                >
+                  PUUID: {truncatePuuid(user.riot_puuid)}
                 </div>
                 <button
                   id="btn-relink-riot"

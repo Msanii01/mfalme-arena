@@ -7,20 +7,10 @@ if (!process.env.PRIVY_APP_ID || !process.env.PRIVY_APP_SECRET) {
   console.error('Missing PRIVY_APP_ID or PRIVY_APP_SECRET in environment');
 }
 
-const privyModule = require('@privy-io/node');
-console.log('Privy module keys:', Object.keys(privyModule));
-
 const privy = new PrivyClient({
   appId: process.env.PRIVY_APP_ID,
   appSecret: process.env.PRIVY_APP_SECRET
 });
-
-console.log('Privy instance keys:', Object.keys(privy));
-console.log('Privy instance prototype keys:', Object.keys(Object.getPrototypeOf(privy)));
-
-
-
-
 
 
 /**
@@ -52,7 +42,30 @@ async function requireAuth(req, res, next) {
   }
 }
 
+/**
+ * Resolve the canonical Ethereum wallet address for a Privy user.
+ * Prefers smart wallets (used for gasless flow) over embedded/external EOAs.
+ * Throws if the user has no ethereum wallet linked.
+ *
+ * @param {string} privyUserId
+ * @returns {Promise<string>} lowercase 0x address
+ */
+async function getCanonicalWallet(privyUserId) {
+  const user = await privy.users._get(privyUserId);
+  const accounts = (user && user.linked_accounts) || [];
+  const ethAccounts = accounts.filter(a => a.chain_type === 'ethereum' && a.address);
+  const smartWallet = ethAccounts.find(a => a.type === 'smart_wallet');
+  const chosen = smartWallet || ethAccounts[0];
+  if (!chosen) {
+    const err = new Error('No Ethereum wallet linked to this Privy user');
+    err.status = 400;
+    throw err;
+  }
+  return chosen.address.toLowerCase();
+}
+
 module.exports = {
   requireAuth,
-  privy // Export the client in case we need it elsewhere (e.g. fetching user data)
+  privy,
+  getCanonicalWallet,
 };

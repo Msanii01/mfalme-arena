@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
@@ -24,10 +25,15 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
  *      - Idempotency: settled flag prevents double settlement
  */
 contract TournamentPool is ReentrancyGuard, Ownable {
+    using SafeERC20 for IERC20;
+
     IERC20 public usdc;
     address public oracle;
-    uint256 public platformFeePercent = 5;
+    uint256 public immutable platformFeePercent;
 
+    // NOTE: `Funded` is reserved for backwards-compat of the enum's numeric layout
+    // (some off-chain consumers may decode raw uint8 status values). It is intentionally
+    // unreachable on-chain; status moves directly Created -> Open on fundTournament().
     enum TournamentStatus { Created, Funded, Open, Full, Active, Completed, Cancelled }
 
     struct Tournament {
@@ -49,15 +55,32 @@ contract TournamentPool is ReentrancyGuard, Ownable {
     event TournamentFull(bytes32 indexed tournamentId);
     event TournamentSettled(bytes32 indexed tournamentId, address indexed winner, uint256 payout);
     event TournamentCancelled(bytes32 indexed tournamentId, uint256 refund);
+    event OracleUpdated(address indexed oldOracle, address indexed newOracle);
 
     modifier onlyOracle() {
         require(msg.sender == oracle, "Not oracle");
         _;
     }
 
-    constructor(address _usdc, address _oracle) Ownable(msg.sender) {
+    constructor(address _usdc, address _oracle, uint256 _platformFeePercent) Ownable(msg.sender) {
+        require(_usdc != address(0), "Invalid usdc");
+        require(_oracle != address(0), "Invalid oracle");
+        require(_platformFeePercent <= 10, "Fee too high");
         usdc   = IERC20(_usdc);
         oracle = _oracle;
+        platformFeePercent = _platformFeePercent;
+        emit OracleUpdated(address(0), _oracle);
+    }
+
+    /**
+     * @notice Rotate the oracle address. Owner-only.
+     *         Use this to recover from a compromised oracle key.
+     */
+    function setOracle(address newOracle) external onlyOwner {
+        require(newOracle != address(0), "Invalid oracle");
+        address old = oracle;
+        oracle = newOracle;
+        emit OracleUpdated(old, newOracle);
     }
 
     /**
@@ -65,7 +88,7 @@ contract TournamentPool is ReentrancyGuard, Ownable {
      * @param tournamentId  bytes32 identifier derived from internal UUID
      * @param prizePool     Total USDC prize pool in raw units (6 decimal precision)
      */
-    function createTournament(bytes32 tournamentId, uint256 prizePool) external {
+    function createTournament(bytes32 tournamentId, uint256 prizePool) external onlyOwner {
         require(tournaments[tournamentId].prizePool == 0, "Already exists");
         require(prizePool > 0, "Invalid prize pool");
         tournaments[tournamentId] = Tournament({
@@ -91,7 +114,7 @@ contract TournamentPool is ReentrancyGuard, Ownable {
         Tournament storage t = tournaments[tournamentId];
         require(t.status == TournamentStatus.Created, "Invalid status");
         require(msg.sender == t.creator, "Only creator can fund");
-        usdc.transferFrom(msg.sender, address(this), t.prizePool);
+        usdc.safeTransferFrom(msg.sender, address(this), t.prizePool);
         t.status = TournamentStatus.Open;
         emit TournamentFunded(tournamentId, t.prizePool);
     }
@@ -99,10 +122,13 @@ contract TournamentPool is ReentrancyGuard, Ownable {
     /**
      * @notice Register a player for an Open tournament.
      *         First player becomes playerA. Second becomes playerB and closes registration.
+     *         Players may only register themselves — `player` must equal `msg.sender`.
      * @param tournamentId  bytes32 tournament identifier
-     * @param player        Wallet address of the registering player
+     * @param player        Wallet address of the registering player (must equal msg.sender)
      */
     function register(bytes32 tournamentId, address player) external {
+        require(player != address(0), "Invalid player");
+        require(msg.sender == player, "Not player");
         Tournament storage t = tournaments[tournamentId];
         require(t.status == TournamentStatus.Open, "Not open");
         require(t.playerA != player, "Already registered");
@@ -139,8 +165,8 @@ contract TournamentPool is ReentrancyGuard, Ownable {
         t.winner  = winner;
         t.status  = TournamentStatus.Completed;
 
-        usdc.transfer(winner, payout);
-        usdc.transfer(owner(), fee);
+        usdc.safeTransfer(winner, payout);
+        usdc.safeTransfer(owner(), fee);
 
         emit TournamentSettled(tournamentId, winner, payout);
     }
@@ -153,14 +179,11 @@ contract TournamentPool is ReentrancyGuard, Ownable {
     function cancel(bytes32 tournamentId) external nonReentrant {
         Tournament storage t = tournaments[tournamentId];
         require(msg.sender == t.creator || msg.sender == owner() || msg.sender == oracle, "Not authorized");
-        require(
-            t.status == TournamentStatus.Open || t.status == TournamentStatus.Funded,
-            "Cannot cancel"
-        );
+        require(t.status == TournamentStatus.Open, "Cannot cancel");
         require(!t.settled, "Already settled");
         uint256 refund = t.prizePool;
         t.status = TournamentStatus.Cancelled;
-        usdc.transfer(t.creator, refund);
+        usdc.safeTransfer(t.creator, refund);
         emit TournamentCancelled(tournamentId, refund);
     }
 }

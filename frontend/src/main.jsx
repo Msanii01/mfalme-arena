@@ -4,7 +4,6 @@ import { BrowserRouter } from 'react-router-dom';
 import { PrivyProvider } from '@privy-io/react-auth';
 import App from './App.jsx';
 import './styles/global.css';
-import { setTokenGetter } from './services/api.js';
 
 const PRIVY_APP_ID = import.meta.env.VITE_PRIVY_APP_ID || 'cmoaen7e4000r0bjsresleyyn';
 
@@ -55,12 +54,6 @@ ReactDOM.createRoot(document.getElementById('root')).render(
           },
           defaultChain: baseSepolia,
           supportedChains: [baseSepolia],
-        }}
-        onSuccess={(user, isNewUser) => {
-          // Inject the Privy token getter so api.js can attach it to every request
-          if (window.__privyInstance) {
-            setTokenGetter(() => window.__privyInstance.getAccessToken());
-          }
         }}
       >
         <BrowserRouter>

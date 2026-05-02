@@ -1,17 +1,25 @@
 'use strict';
 
+const crypto = require('crypto');
 const express = require('express');
-const { ethers } = require('ethers');
 const db = require('../db/client');
-const escrowAbi = require('../constants/MatchEscrow.json').abi;
+const { getEscrowContract } = require('../services/oracle');
 
 const router = express.Router();
 
+function timingSafeEqualStr(a, b) {
+  const aBuf = Buffer.from(String(a));
+  const bBuf = Buffer.from(String(b));
+  if (aBuf.length !== bBuf.length) return false;
+  return crypto.timingSafeEqual(aBuf, bBuf);
+}
+
 /**
  * POST /api/webhooks/riot
- * Simulated Riot Games Webhook endpoint for MVP.
- * In production, Riot sends match completion data here.
- * 
+ * Internal-only settlement endpoint. Callers must present
+ * X-Internal-Auth matching WEBHOOK_SECRET. The endpoint fails
+ * closed if WEBHOOK_SECRET is not configured.
+ *
  * Expected Body:
  * {
  *   "matchId": "UUID",
@@ -20,6 +28,15 @@ const router = express.Router();
  */
 router.post('/riot', async (req, res, next) => {
   try {
+    const expected = process.env.WEBHOOK_SECRET;
+    if (!expected) {
+      return res.status(503).json({ error: 'Webhook disabled' });
+    }
+    const provided = req.get('X-Internal-Auth');
+    if (!provided || !timingSafeEqualStr(provided, expected)) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
     const { matchId, winnerPuuid } = req.body;
     
     if (!matchId || !winnerPuuid) {
@@ -46,21 +63,15 @@ router.post('/riot', async (req, res, next) => {
     const winnerWallet = winnerRes.rows[0].wallet_address;
     const winnerUserId = winnerRes.rows[0].user_id;
 
-    // 4. Trigger the smart contract settlement
-    // Load admin oracle wallet
-    const rpcUrl = process.env.BASE_RPC_URL || 'https://base-sepolia-rpc.publicnode.com';
-    const provider = new ethers.JsonRpcProvider(rpcUrl);
-    const oracleWallet = new ethers.Wallet(process.env.DEPLOYER_PRIVATE_KEY, provider);
-    const escrowAddress = process.env.ESCROW_CONTRACT_ADDRESS;
-
-    if (!escrowAddress) {
-      throw new Error('ESCROW_CONTRACT_ADDRESS not configured in environment');
+    // 4. Trigger the smart contract settlement using the shared oracle wallet
+    // (services/oracle.js — single source of truth for the on-chain signer).
+    const escrowContract = getEscrowContract();
+    if (!escrowContract) {
+      return res.status(503).json({ error: 'Oracle settlement disabled (ORACLE_PRIVATE_KEY or ESCROW_CONTRACT_ADDRESS missing)' });
     }
 
-    const escrowContract = new ethers.Contract(escrowAddress, escrowAbi, oracleWallet);
-
     console.log(`⚖️ Settling match ${matchId} for winner ${winnerWallet}`);
-    
+
     // The escrow_match_id is a hex string (bytes32) we stored in the DB
     const tx = await escrowContract.settle(match.escrow_match_id, winnerWallet);
     const receipt = await tx.wait();
@@ -75,8 +86,10 @@ router.post('/riot', async (req, res, next) => {
 
     res.json({ message: 'Match successfully settled on-chain', txHash: receipt.hash });
   } catch (error) {
-    console.error('Webhook Settlement Error:', error);
-    res.status(500).json({ error: error.message || 'Failed to process webhook' });
+    // Don't leak error.message (which can include node stack details / RPC
+    // internals). Hand off to the global error handler, which logs the full
+    // error server-side and returns a redacted response in production.
+    next(error);
   }
 });
 

@@ -28,8 +28,10 @@ async function main() {
   console.log('USDC:', usdcAddress);
   console.log('Oracle (backend wallet):', oracleAddress);
 
+  const platformFeePercent = 5;
+
   const TournamentPool = await ethers.getContractFactory('TournamentPool');
-  const pool = await TournamentPool.deploy(usdcAddress, oracleAddress);
+  const pool = await TournamentPool.deploy(usdcAddress, oracleAddress, platformFeePercent);
   await pool.waitForDeployment();
   const poolAddress = await pool.getAddress();
 

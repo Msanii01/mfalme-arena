@@ -135,8 +135,17 @@ router.post('/', requireAuth, async (req, res, next) => {
 router.get('/:id', requireAuth, async (req, res, next) => {
   try {
     const { id } = req.params;
+    const userId = req.user.id;
+
+    // Resolve internal UUID for the caller. We scope the SELECT below to
+    // matches the caller actually participates in to prevent IDOR — and we
+    // return 404 (not 403) when no row matches so we don't leak existence.
+    const userRes = await db.query('SELECT user_id FROM users WHERE privy_user_id = $1', [userId]);
+    if (userRes.rows.length === 0) return res.status(404).json({ error: 'Match not found' });
+    const internalUserId = userRes.rows[0].user_id;
+
     const matchRes = await db.query(
-      `SELECT m.*, 
+      `SELECT m.*,
               '0x' || encode(m.escrow_match_id, 'hex') as escrow_match_id,
               u1.riot_game_name as player_a_name, u1.riot_tag_line as player_a_tag, u1.wallet_address as player_a_wallet,
               u2.riot_game_name as player_b_name, u2.riot_tag_line as player_b_tag, u2.wallet_address as player_b_wallet,
@@ -145,8 +154,9 @@ router.get('/:id', requireAuth, async (req, res, next) => {
        JOIN users u1 ON m.player_a_id = u1.user_id
        LEFT JOIN users u2 ON m.player_b_id = u2.user_id
        LEFT JOIN tictactoe_games g ON m.match_id = g.match_id
-       WHERE m.match_id = $1`,
-      [id]
+       WHERE m.match_id = $1
+         AND (m.player_a_id = $2 OR m.player_b_id = $2)`,
+      [id, internalUserId]
     );
 
     if (matchRes.rows.length === 0) return res.status(404).json({ error: 'Match not found' });
@@ -169,9 +179,11 @@ router.post('/:id/accept', requireAuth, async (req, res, next) => {
     const userRes = await db.query('SELECT user_id FROM users WHERE privy_user_id = $1', [userId]);
     const internalUserId = userRes.rows[0].user_id;
 
-    // Update match if they are player_b and it's pending
+    // Update match if they are player_b and it's pending.
+    // Stamp accepted_at so the cleanup service can give this row a grace
+    // window before reaping it (see services/cleanup.js).
     const matchRes = await db.query(
-      `UPDATE matches SET status = 'accepted' 
+      `UPDATE matches SET status = 'accepted', accepted_at = NOW()
        WHERE match_id = $1 AND player_b_id = $2 AND status = 'pending'
        RETURNING *`,
       [id, internalUserId]
@@ -192,6 +204,7 @@ router.post('/:id/accept', requireAuth, async (req, res, next) => {
 router.post('/:id/deposit', requireAuth, async (req, res, next) => {
   try {
     const { id } = req.params;
+    const userId = req.user.id;
     const userRes = await db.query('SELECT user_id FROM users WHERE privy_user_id = $1', [userId]);
     if (userRes.rows.length === 0) return res.status(404).json({ error: 'User not found' });
     const internalUserId = userRes.rows[0].user_id;

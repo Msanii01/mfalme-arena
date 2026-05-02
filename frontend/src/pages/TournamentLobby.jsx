@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
+import { usePrivy } from '@privy-io/react-auth';
 import Sidebar from '../components/Sidebar.jsx';
 import { tournamentAPI, tictactoeAPI } from '../services/api.js';
 import { useCurrentUser } from '../hooks/useCurrentUser.js';
@@ -8,9 +9,12 @@ import { useCurrentUser } from '../hooks/useCurrentUser.js';
 export default function TournamentLobby() {
   const navigate = useNavigate();
   const { user } = useCurrentUser();
+  const { ready, authenticated, getAccessToken } = usePrivy();
   const [tournaments, setTournaments] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [processingId, setProcessingId] = useState(null);
+  // Split state so the Register and Enter Arena buttons are independently in-flight tracked.
+  const [registeringId, setRegisteringId] = useState(null);
+  const [enteringId, setEnteringId] = useState(null);
   const [error, setError] = useState(null);
 
   useEffect(() => {
@@ -35,39 +39,73 @@ export default function TournamentLobby() {
     return () => clearInterval(interval);
   }, [fetchTournaments]);
 
-  // Live socket updates: refresh lobby when a tournament is settled
+  // Live socket updates: refresh lobby when a tournament is settled.
+  // TODO: backend currently emits `settlement_success` to a per-game room
+  //       (e.g. settle_<tournamentId>) — broadcasting globally won't catch
+  //       individual settlements. We attempt to join a `tournament_lobby`
+  //       room so the backend can broadcast lobby-level updates there.
+  //       If the backend doesn't have this room wired, the listener above
+  //       simply never fires, and the 15s polling interval is the fallback.
   useEffect(() => {
-    const socket = io(import.meta.env.VITE_API_URL || 'http://localhost:3001');
+    if (!ready || !authenticated) return undefined;
+    const socket = io(import.meta.env.VITE_API_URL || 'http://localhost:3001', {
+      // Async auth callback: socket.io-client invokes this on every (re)connect,
+      // giving us a fresh Privy token even after token rotation.
+      auth: async (cb) => {
+        try {
+          const token = await getAccessToken();
+          cb({ token: token || '' });
+        } catch (e) {
+          cb({ token: '' });
+        }
+      },
+    });
+    socket.on('connect', () => {
+      // Subscribe to a lobby-wide room so we can hear settlement broadcasts.
+      // Backend gap: confirm a `tournament_lobby` room exists in the socket server;
+      // if not, this emit is a no-op and we'll fall back to polling.
+      socket.emit('join', 'tournament_lobby');
+    });
+    socket.on('connect_error', (err) => {
+      if (import.meta.env.DEV) console.warn('Tournament socket auth failed:', err?.message);
+    });
     socket.on('settlement_success', () => {
       // A game just finished — refresh the tournament list
       fetchTournaments();
     });
     return () => socket.disconnect();
-  }, [fetchTournaments]);
+  }, [fetchTournaments, ready, authenticated, getAccessToken]);
 
   const handleRegister = async (id) => {
-
-    setProcessingId(id);
+    if (registeringId) return;
+    setRegisteringId(id);
     setError(null);
     try {
       await tournamentAPI.registerTournament(id);
       fetchTournaments(); // refresh list
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to register');
+      // H5: 409 → friendly message
+      const status = err.response?.status;
+      if (status === 409) {
+        setError('Tournament already full');
+      } else {
+        setError(err.response?.data?.error || 'Failed to register');
+      }
     } finally {
-      setProcessingId(null);
+      setRegisteringId(null);
     }
   };
 
   const handleEnterArena = async (id) => {
-    setProcessingId(id);
+    if (enteringId) return;
+    setEnteringId(id);
     setError(null);
     try {
       const game = await tictactoeAPI.initGame(id, null);
       navigate(`/tictactoe/${game.game_id}`);
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to enter arena');
-      setProcessingId(null);
+      setEnteringId(null);
     }
   };
 
@@ -139,12 +177,12 @@ export default function TournamentLobby() {
                     
                     <div>
                       {t.status === 'open' && !isRegistered && (
-                        <button 
-                          className={`btn btn-primary${processingId === t.tournament_id ? ' btn-loading' : ''}`}
+                        <button
+                          className={`btn btn-primary${registeringId === t.tournament_id ? ' btn-loading' : ''}`}
                           onClick={() => handleRegister(t.tournament_id)}
-                          disabled={processingId === t.tournament_id}
+                          disabled={!!registeringId}
                         >
-                          {processingId === t.tournament_id ? 'Joining...' : 'Register to Play'}
+                          {registeringId === t.tournament_id ? 'Joining...' : 'Register to Play'}
                         </button>
                       )}
                       {t.status === 'open' && isRegistered && (
@@ -153,12 +191,12 @@ export default function TournamentLobby() {
                       {isMatchReady && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center' }}>
                           <div className="text-teal" style={{ fontWeight: 600 }}>Match Ready!</div>
-                          <button 
-                            className={`btn btn-secondary${processingId === t.tournament_id ? ' btn-loading' : ''}`}
+                          <button
+                            className={`btn btn-secondary${enteringId === t.tournament_id ? ' btn-loading' : ''}`}
                             onClick={() => handleEnterArena(t.tournament_id)}
-                            disabled={processingId === t.tournament_id}
+                            disabled={!!enteringId}
                           >
-                            {processingId === t.tournament_id ? 'Entering...' : 'Enter Arena ⚔️'}
+                            {enteringId === t.tournament_id ? 'Entering...' : 'Enter Arena ⚔️'}
                           </button>
                         </div>
                       )}

@@ -6,10 +6,13 @@ import { baseSepolia } from 'viem/chains';
 import Sidebar from '../components/Sidebar.jsx';
 import { tournamentAPI } from '../services/api.js';
 import { useCurrentUser } from '../hooks/useCurrentUser.js';
-
-// Base Sepolia Addresses
-const USDC_ADDRESS = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
-const TOURNAMENT_POOL_ADDRESS = import.meta.env.VITE_TOURNAMENT_CONTRACT_ADDRESS || '0x81D9859248489e73ccF00845EF3Bc7E2B59FC9f8';
+import {
+  USDC_ADDRESS,
+  TOURNAMENT_POOL_ADDRESS,
+  BUNDLER_RPC_URL,
+  CHAIN_ID,
+  CHAIN_ID_HEX,
+} from '../config/contracts.js';
 
 const ERC20_ABI = [
   { inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }], name: "approve", outputs: [{ name: "", type: "bool" }], type: "function" }
@@ -19,6 +22,58 @@ const TOURNAMENT_ABI = [
   { inputs: [{ name: "tournamentId", type: "bytes32" }, { name: "prizePool", type: "uint256" }], name: "createTournament", outputs: [], type: "function" },
   { inputs: [{ name: "tournamentId", type: "bytes32" }], name: "fundTournament", outputs: [], type: "function" }
 ];
+
+// Validate stake/prize-pool input: positive finite number, [1, 100000], <=6 decimals (USDC precision)
+function validateUsdcAmount(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 'Enter a valid number';
+  if (n < 1) return 'Minimum is 1 USDC';
+  if (n > 100000) return 'Maximum is 100,000 USDC';
+  const str = String(raw).trim();
+  const decIdx = str.indexOf('.');
+  if (decIdx >= 0 && str.length - decIdx - 1 > 6) return 'USDC supports up to 6 decimal places';
+  return null;
+}
+
+// Poll EIP-5792 wallet_getCallsStatus until CONFIRMED. Returns the receipts array.
+async function waitForCallsConfirmed(provider, bundleId, { intervalMs = 2000, timeoutMs = 180000 } = {}) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const result = await provider.request({
+      method: 'wallet_getCallsStatus',
+      params: [bundleId],
+    });
+    const status = result?.status;
+    const isConfirmed =
+      status === 'CONFIRMED' ||
+      status === 'confirmed' ||
+      status === 200 ||
+      ((result?.receipts?.length > 0) && (status === undefined || status === null));
+    if (isConfirmed && result?.receipts?.length > 0) return result;
+    if (status === 'FAILED' || status === 'failed' || status >= 400) {
+      throw new Error(`Bundle failed (status=${status})`);
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  throw new Error('Timed out waiting for bundle confirmation');
+}
+
+const pendingTxKey = (tournamentId) => `mfalme_pending_tx_tournament_${tournamentId}`;
+
+// M4: map raw RPC/wallet errors to a short user-friendly string.
+function formatTxError(err) {
+  const msg = (err?.message || '').toLowerCase();
+  if (msg.includes('user rejected') || msg.includes('user denied')) {
+    return 'Transaction cancelled';
+  }
+  if (msg.includes('insufficient funds')) {
+    return 'Insufficient ETH for gas (or USDC for stake)';
+  }
+  if (msg.includes('paymaster')) {
+    return 'Sponsorship unavailable, please try again';
+  }
+  return 'Transaction failed. Please try again.';
+}
 
 export default function HostDashboard() {
   const navigate = useNavigate();
@@ -30,6 +85,7 @@ export default function HostDashboard() {
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState('');
   const [prizePool, setPrizePool] = useState('10');
+  const [prizePoolError, setPrizePoolError] = useState(null);
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
@@ -43,7 +99,8 @@ export default function HostDashboard() {
       const data = await tournamentAPI.getTournaments();
       setTournaments(data);
     } catch (err) {
-      console.error(err);
+      // M3: keep prod logs minimal — no full axios error dump.
+      console.error('fetchTournaments failed', err?.response?.status, err?.message);
     } finally {
       setLoading(false);
     }
@@ -52,19 +109,37 @@ export default function HostDashboard() {
   // Find the connected external wallet (e.g. OKX, MetaMask)
   const externalWallet = wallets.find(w => w.walletClientType !== 'privy');
 
-  // Immediately prompt to switch to Base Sepolia if connected to the wrong network
+  // Immediately prompt to switch to Base Sepolia if connected to the wrong network.
+  // M8: Depend on stable scalars (address + chainId) instead of the wallet
+  // object identity, which Privy may rebuild on every render and cause this
+  // effect to refire (and potentially loop the chain-switch prompt).
+  const externalAddress = externalWallet?.address;
+  const externalChainId = externalWallet?.chainId;
   useEffect(() => {
-    if (externalWallet && externalWallet.chainId !== 'eip155:84532') {
-      externalWallet.switchChain(84532).catch(err => {
-        console.error('Failed to switch chain on connect:', err);
+    if (externalWallet && externalChainId !== `eip155:${CHAIN_ID}`) {
+      externalWallet.switchChain(CHAIN_ID).catch(err => {
+        if (import.meta.env.DEV) {
+          console.error('Failed to switch chain on connect:', err);
+        } else {
+          console.error('Failed to switch chain on connect:', err?.message);
+        }
       });
     }
-  }, [externalWallet]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [externalAddress, externalChainId]);
 
   const handleGenerate = async (e) => {
     e.preventDefault();
     if (!name || !prizePool) return;
-    
+
+    // H2: validate prize pool amount
+    const validation = validateUsdcAmount(prizePool);
+    if (validation) {
+      setPrizePoolError(validation);
+      return;
+    }
+    setPrizePoolError(null);
+
     const smartWallet = wallets.find((w) => w.walletClientType === 'smart_wallet');
     const wallet = smartWallet || wallets.find(w => w.walletClientType !== 'privy');
 
@@ -86,8 +161,8 @@ export default function HostDashboard() {
       const provider = await wallet.getEthereumProvider();
 
       // Ensure network is Base Sepolia
-      if (wallet.chainId !== 'eip155:84532') {
-        await wallet.switchChain(84532);
+      if (wallet.chainId !== `eip155:${CHAIN_ID}`) {
+        await wallet.switchChain(CHAIN_ID);
       }
 
       // 1. Create tournament data
@@ -111,16 +186,18 @@ export default function HostDashboard() {
         args: [contractId]
       });
 
-      console.log('Initiating tournament creation & funding...');
+      if (import.meta.env.DEV) console.log('Initiating tournament creation & funding...');
+
+      let settlementTxHash = null;
 
       if (wallet.walletClientType === 'smart_wallet') {
-        console.log('Sending batched UserOperation via Paymaster...');
-        
-        await provider.request({
+        if (import.meta.env.DEV) console.log('Sending batched UserOperation via Paymaster...');
+
+        const sendCallsResult = await provider.request({
           method: 'wallet_sendCalls',
           params: [{
             version: '1',
-            chainId: `0x${(84532).toString(16)}`,
+            chainId: CHAIN_ID_HEX,
             from: wallet.address,
             calls: [
               { to: TOURNAMENT_POOL_ADDRESS, data: createData, value: '0x0' },
@@ -128,20 +205,36 @@ export default function HostDashboard() {
               { to: TOURNAMENT_POOL_ADDRESS, data: fundData, value: '0x0' }
             ],
             capabilities: {
-              paymasterService: {
-                url: import.meta.env.VITE_BUNDLER_RPC_URL
-              }
+              paymasterService: { url: BUNDLER_RPC_URL }
             }
           }]
         });
-        
-        setSuccess('Tournament successfully created and funded!');
+        // EIP-5792 wallets vary: some return a string, others return { id: ... }
+        const bundleId = typeof sendCallsResult === 'string' ? sendCallsResult : sendCallsResult?.id;
+        if (!bundleId) throw new Error('wallet_sendCalls returned no bundle id');
+
+        // Persist pending tx so we can resume polling across reloads
+        try {
+          localStorage.setItem(pendingTxKey(dbTourney.tournament_id), JSON.stringify({
+            tournamentId: dbTourney.tournament_id,
+            bundleId,
+            type: 'tournament-fund',
+            timestamp: Date.now(),
+          }));
+        } catch (_) { /* localStorage may be unavailable */ }
+
+        // Wait for the bundler to confirm
+        const status = await waitForCallsConfirmed(provider, bundleId);
+        // Extract the on-chain tx hash from the last receipt (the fundTournament call)
+        const receipts = status.receipts || [];
+        const lastReceipt = receipts[receipts.length - 1];
+        settlementTxHash = lastReceipt?.transactionHash || lastReceipt?.txHash || null;
       } else {
         // Sequential fallback for EOAs (requires gas)
         const publicClient = createPublicClient({ chain: baseSepolia, transport: http() });
-        
-        console.log('Sending sequential transactions (Standard Wallet)...');
-        
+
+        if (import.meta.env.DEV) console.log('Sending sequential transactions (Standard Wallet)...');
+
         const createTx = await provider.request({
           method: 'eth_sendTransaction',
           params: [{ from: wallet.address, to: TOURNAMENT_POOL_ADDRESS, data: createData }]
@@ -162,23 +255,27 @@ export default function HostDashboard() {
         });
         setSuccess('Funding tournament...');
         await publicClient.waitForTransactionReceipt({ hash: fundTx });
-        
-        setSuccess('Tournament successfully created and funded!');
+        settlementTxHash = fundTx;
       }
 
-      // Update backend status
-      await tournamentAPI.fundTournament(dbTourney.tournament_id, 'batch-completed');
-      
+      // Update backend status (only after on-chain confirmation)
+      await tournamentAPI.fundTournament(dbTourney.tournament_id, settlementTxHash || 'batch-completed');
+      try { localStorage.removeItem(pendingTxKey(dbTourney.tournament_id)); } catch (_) { /* noop */ }
+
+      setSuccess('Tournament successfully created and funded!');
       setName('');
       fetchTournaments();
 
     } catch (err) {
-      console.error('Tournament creation error:', err);
-      if (err.message?.includes('insufficient funds')) {
-        setError('Insufficient gas funds. Please ensure the Paymaster is configured or add ETH to your wallet.');
+      // M3: full error only in dev.
+      if (import.meta.env.DEV) {
+        console.error('Tournament creation error:', err);
       } else {
-        setError(err.response?.data?.error || err.message || 'Failed to generate tournament');
+        console.error('Tournament creation error:', err?.response?.status, err?.message);
       }
+      // M4: prefer backend-provided message if present, else map RPC errors.
+      const apiMsg = err?.response?.data?.error;
+      setError(apiMsg || formatTxError(err));
     } finally {
       setProcessing(false);
     }
@@ -197,7 +294,7 @@ export default function HostDashboard() {
           {/* Generation Form */}
           <div className="card card-purple">
             <h2 className="heading" style={{ marginBottom: 24 }}>Generate Tournament</h2>
-            
+
             {!externalWallet ? (
               <div style={{ textAlign: 'center', padding: '20px 0' }}>
                 <p style={{ marginBottom: 16 }}>You must connect your host wallet to fund prize pools.</p>
@@ -243,17 +340,24 @@ export default function HostDashboard() {
                   type="number"
                   className="form-input"
                   min="1"
-                  step="0.1"
+                  max="100000"
+                  step="0.000001"
                   value={prizePool}
-                  onChange={(e) => setPrizePool(e.target.value)}
+                  onChange={(e) => {
+                    setPrizePool(e.target.value);
+                    setPrizePoolError(validateUsdcAmount(e.target.value));
+                  }}
                   required
                 />
+                {prizePoolError && (
+                  <p className="form-hint" style={{ color: 'var(--danger)' }}>{prizePoolError}</p>
+                )}
               </div>
 
               <button
                 type="submit"
                 className={`btn btn-primary btn-full${processing ? ' btn-loading' : ''}`}
-                disabled={processing || !name || !prizePool || !externalWallet}
+                disabled={processing || !name || !prizePool || !externalWallet || !!prizePoolError}
               >
                 {processing ? 'Processing txs...' : 'Create & Fund Tournament 🏆'}
               </button>
@@ -266,17 +370,32 @@ export default function HostDashboard() {
               <h2 className="heading">Tournament Registry</h2>
               <button className="btn btn-ghost btn-sm" onClick={fetchTournaments}>Refresh</button>
             </div>
-            
+
             {loading ? (
               <div className="text-center text-muted" style={{ padding: 40 }}>Loading...</div>
             ) : tournaments.length === 0 ? (
-              <div className="empty-state" style={{ padding: '40px 16px' }}>
-                <div className="empty-state-title">No tournaments</div>
+              <div className="empty-state" style={{ padding: '60px 20px' }}>
+                <div className="empty-state-icon">🏆</div>
+                <div className="empty-state-title">No tournaments yet</div>
+                <p style={{ marginBottom: 16 }}>
+                  Create your first tournament to fund a prize pool for the community.
+                </p>
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={() => {
+                    // Focus the name input in the create form to invite action.
+                    const nameInput = document.querySelector('input.form-input');
+                    if (nameInput) nameInput.focus();
+                  }}
+                  disabled={!externalWallet}
+                >
+                  {externalWallet ? 'Create Tournament' : 'Connect Host Wallet First'}
+                </button>
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 {tournaments.map(t => (
-                  <div key={t.tournament_id} style={{ 
+                  <div key={t.tournament_id} style={{
                     background: 'var(--bg-input)', padding: 16, borderRadius: 'var(--radius-md)',
                     border: '1px solid var(--border-default)'
                   }}>

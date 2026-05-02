@@ -18,8 +18,21 @@ export default function ChallengeLobby() {
   const [opponentWallet, setOpponentWallet] = useState('');
   const [stake, setStake] = useState('10');
   
+  const [stakeError, setStakeError] = useState(null);
   const [error, setError] = useState(null);
   const [creating, setCreating] = useState(false);
+
+  // Validate stake input: positive finite number, [1, 100000], <=6 decimals (USDC precision)
+  const validateStake = (raw) => {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return 'Enter a valid number';
+    if (n < 1) return 'Minimum stake is 1 USDC';
+    if (n > 100000) return 'Maximum stake is 100,000 USDC';
+    const str = String(raw).trim();
+    const decIdx = str.indexOf('.');
+    if (decIdx >= 0 && str.length - decIdx - 1 > 6) return 'USDC supports up to 6 decimal places';
+    return null;
+  };
 
   useEffect(() => {
     fetchMatches();
@@ -31,7 +44,8 @@ export default function ChallengeLobby() {
       const data = await matchAPI.getMatches();
       setMatches(data);
     } catch (err) {
-      console.error(err);
+      // M2/M3: keep prod logs minimal (no full axios payload).
+      console.error('fetchMatches failed', err?.response?.status, err?.message);
     } finally {
       setLoading(false);
     }
@@ -39,6 +53,14 @@ export default function ChallengeLobby() {
 
   const handleChallenge = async (e) => {
     e.preventDefault();
+    // H2: validate stake before submit
+    const stakeValidation = validateStake(stake);
+    if (stakeValidation) {
+      setStakeError(stakeValidation);
+      return;
+    }
+    setStakeError(null);
+
     setCreating(true);
     setError(null);
     try {
@@ -138,11 +160,18 @@ export default function ChallengeLobby() {
                   type="number"
                   className="form-input"
                   min="1"
-                  step="0.1"
+                  max="100000"
+                  step="0.000001"
                   value={stake}
-                  onChange={(e) => setStake(e.target.value)}
+                  onChange={(e) => {
+                    setStake(e.target.value);
+                    setStakeError(validateStake(e.target.value));
+                  }}
                   required
                 />
+                {stakeError && (
+                  <p className="form-hint" style={{ color: 'var(--danger)' }}>{stakeError}</p>
+                )}
               </div>
 
               {gameMode === 'lol' && !user?.riot_puuid && (
@@ -153,7 +182,7 @@ export default function ChallengeLobby() {
               <button
                 type="submit"
                 className={`btn btn-primary btn-full${creating ? ' btn-loading' : ''}`}
-                disabled={creating || (gameMode === 'lol' ? (!gameName || !tagLine || !user?.riot_puuid) : !opponentWallet)}
+                disabled={creating || !!stakeError || (gameMode === 'lol' ? (!gameName || !tagLine || !user?.riot_puuid) : !opponentWallet)}
               >
                 {creating ? 'Creating...' : 'Send Challenge ⚔️'}
               </button>
@@ -188,19 +217,26 @@ export default function ChallengeLobby() {
                     opponentName = oppWallet ? `${oppWallet.slice(0, 6)}...${oppWallet.slice(-4)}` : 'Unknown';
                   }
                   
+                  const ariaLabel = `Match against ${opponentName}, ${m.stake_amount} USDC, ${m.status}`;
                   return (
-                    <div 
-                      key={m.match_id} 
+                    <button
+                      key={m.match_id}
+                      type="button"
                       className="card-hover"
-                      style={{ 
-                        background: 'var(--bg-input)', 
-                        padding: 16, 
+                      aria-label={ariaLabel}
+                      style={{
+                        background: 'var(--bg-input)',
+                        padding: 16,
                         borderRadius: 'var(--radius-md)',
                         display: 'flex',
                         justifyContent: 'space-between',
                         alignItems: 'center',
                         cursor: 'pointer',
-                        border: '1px solid var(--border-default)'
+                        border: '1px solid var(--border-default)',
+                        textAlign: 'left',
+                        font: 'inherit',
+                        color: 'inherit',
+                        width: '100%',
                       }}
                       onClick={() => navigate(`/match/${m.match_id}`)}
                     >
@@ -217,8 +253,8 @@ export default function ChallengeLobby() {
                           </span>
                         </div>
                       </div>
-                      <div style={{ color: 'var(--text-muted)' }}>→</div>
-                    </div>
+                      <div style={{ color: 'var(--text-muted)' }} aria-hidden="true">→</div>
+                    </button>
                   );
                 })}
               </div>

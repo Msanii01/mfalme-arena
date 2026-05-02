@@ -1,12 +1,14 @@
 import { NavLink, useNavigate } from 'react-router-dom';
 import { usePrivy } from '@privy-io/react-auth';
-import { useCurrentUser } from '../hooks/useCurrentUser.js';
+import { useCurrentUser, clearUserCache } from '../hooks/useCurrentUser.js';
 
+// M10: Deposit USDC and Tournament Detail are still stubs (ComingSoon
+// pages). The route handlers remain in App.jsx, but we hide the entries
+// from the user-visible nav so we don't link to dead-end views.
 const NAV = [
   { to: '/dashboard',   icon: '📊', label: 'Dashboard' },
   { to: '/challenge',   icon: '⚔️',  label: 'Challenge' },
   { to: '/tournaments', icon: '🏆', label: 'Tournaments' },
-  { to: '/deposit',     icon: '💰', label: 'Deposit USDC' },
 ];
 
 export default function Sidebar() {
@@ -15,6 +17,7 @@ export default function Sidebar() {
   const navigate = useNavigate();
 
   const handleLogout = async () => {
+    clearUserCache();
     await logout();
     navigate('/', { replace: true });
   };

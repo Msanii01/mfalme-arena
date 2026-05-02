@@ -32,12 +32,31 @@ async function main() {
   }
 
   const Paymaster = await ethers.getContractFactory('MfalmePaymaster');
-  const paymaster = await Paymaster.deploy(entryPoint);
+  // 0.005 ETH per-op cap. Tune via setMaxCostCap() post-deploy.
+  const MAX_COST_CAP = ethers.parseEther('0.005');
+  const paymaster = await Paymaster.deploy(entryPoint, MAX_COST_CAP);
   await paymaster.waitForDeployment();
   const paymasterAddress = await paymaster.getAddress();
 
   console.log('\n✅ MfalmePaymaster deployed to:', paymasterAddress);
   console.log('   Add to .env:  PAYMASTER_ADDRESS=' + paymasterAddress);
+
+  const escrow = process.env.ESCROW_CONTRACT_ADDRESS;
+  const tournament = process.env.TOURNAMENT_CONTRACT_ADDRESS;
+  if (escrow) {
+    console.log('\n🔓 Allowlisting escrow target:', escrow);
+    const tx = await paymaster.setAllowedTarget(escrow, true);
+    await tx.wait();
+  } else {
+    console.log('\n⚠️  ESCROW_CONTRACT_ADDRESS not set — call setAllowedTarget() manually before users can deposit/settle.');
+  }
+  if (tournament) {
+    console.log('🔓 Allowlisting tournament target:', tournament);
+    const tx = await paymaster.setAllowedTarget(tournament, true);
+    await tx.wait();
+  } else {
+    console.log('⚠️  TOURNAMENT_CONTRACT_ADDRESS not set — call setAllowedTarget() manually before users can register.');
+  }
 
   // Fund the paymaster with 0.5 ETH via EntryPoint
   const FUND_AMOUNT = ethers.parseEther('0.5');

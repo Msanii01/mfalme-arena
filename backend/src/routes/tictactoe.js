@@ -4,36 +4,10 @@ const express = require('express');
 const { requireAuth } = require('../middleware/auth');
 const db = require('../db/client');
 const { getIO } = require('../socket');
-const { ethers } = require('ethers');
-
-// Smart Contract Setup
-const TOURNAMENT_ABI = [
-  { inputs: [{ name: "tournamentId", type: "bytes32" }, { name: "winner", type: "address" }], name: "settle", outputs: [], type: "function" }
-];
-const ESCROW_ABI = [
-  { inputs: [{ name: "matchId", type: "bytes32" }, { name: "winner", type: "address" }], name: "settle", outputs: [], type: "function" }
-];
-
-const provider = new ethers.JsonRpcProvider(process.env.BASE_RPC_URL || 'https://sepolia.base.org');
-let oracleWallet, tournamentContract, escrowContract;
-
-// Oracle key: use ADMIN_PRIVATE_KEY if set (recommended), fall back to DEPLOYER_PRIVATE_KEY
-const oracleKey = process.env.ADMIN_PRIVATE_KEY || process.env.DEPLOYER_PRIVATE_KEY;
-
-if (oracleKey) {
-  oracleWallet = new ethers.Wallet(oracleKey, provider);
-  console.log(`⚙️  Oracle wallet: ${oracleWallet.address}`);
-  if (process.env.TOURNAMENT_CONTRACT_ADDRESS) {
-    tournamentContract = new ethers.Contract(process.env.TOURNAMENT_CONTRACT_ADDRESS, TOURNAMENT_ABI, oracleWallet);
-    console.log(`⚙️  TournamentPool: ${process.env.TOURNAMENT_CONTRACT_ADDRESS}`);
-  }
-  if (process.env.ESCROW_CONTRACT_ADDRESS) {
-    escrowContract = new ethers.Contract(process.env.ESCROW_CONTRACT_ADDRESS, ESCROW_ABI, oracleWallet);
-    console.log(`⚙️  MatchEscrow: ${process.env.ESCROW_CONTRACT_ADDRESS}`);
-  }
-} else {
-  console.warn('⚠️ No oracle key found (ADMIN_PRIVATE_KEY or DEPLOYER_PRIVATE_KEY). Smart contract settlement will be disabled.');
-}
+const {
+  getEscrowContract,
+  getTournamentContract,
+} = require('../services/oracle');
 
 const router = express.Router();
 
@@ -55,12 +29,17 @@ const checkWin = (board) => {
 
 /**
  * POST /api/tictactoe/init
- * Initializes a tic tac toe game for a tournament or match
+ * Initializes a tic tac toe game for a tournament or match.
+ *
+ * Guard: a TTT game may only be created when the underlying match (or
+ * tournament's match-equivalent) is `active` and both players have funded
+ * their deposits. Without this guard, a settlement could fire before the
+ * escrow holds the stake — letting the contract revert / pay nothing.
  */
 router.post('/init', requireAuth, async (req, res, next) => {
   try {
     const { tournamentId, matchId } = req.body;
-    
+
     if (!tournamentId && !matchId) {
       return res.status(400).json({ error: 'Must provide tournamentId or matchId' });
     }
@@ -68,15 +47,38 @@ router.post('/init', requireAuth, async (req, res, next) => {
     let playerX, playerO;
 
     if (tournamentId) {
-      const tRes = await db.query('SELECT player_a_id, player_b_id FROM tournaments WHERE tournament_id = $1', [tournamentId]);
+      const tRes = await db.query(
+        `SELECT player_a_id, player_b_id, status FROM tournaments WHERE tournament_id = $1`,
+        [tournamentId]
+      );
       if (tRes.rows.length === 0) return res.status(404).json({ error: 'Tournament not found' });
-      playerX = tRes.rows[0].player_a_id;
-      playerO = tRes.rows[0].player_b_id;
+      // For tournaments, allow `full` (registration done) or `active` to bootstrap
+      // the TTT board. The tournament has no per-player deposit columns — the
+      // host pre-funds the prize pool via fundTournament.
+      const t = tRes.rows[0];
+      if (t.status !== 'full' && t.status !== 'active') {
+        return res.status(400).json({ error: `Tournament not ready (status='${t.status}')` });
+      }
+      playerX = t.player_a_id;
+      playerO = t.player_b_id;
     } else {
-      const mRes = await db.query('SELECT challenger_id, challenged_id FROM matches WHERE match_id = $1', [matchId]);
+      // Match-mode: require status='active' AND both deposits in.
+      // FIX: previous code referenced nonexistent columns challenger_id/challenged_id.
+      const mRes = await db.query(
+        `SELECT player_a_id, player_b_id, status, player_a_deposited, player_b_deposited
+           FROM matches WHERE match_id = $1`,
+        [matchId]
+      );
       if (mRes.rows.length === 0) return res.status(404).json({ error: 'Match not found' });
-      playerX = mRes.rows[0].challenger_id;
-      playerO = mRes.rows[0].challenged_id;
+      const m = mRes.rows[0];
+      if (m.status !== 'active') {
+        return res.status(400).json({ error: `Match not active (status='${m.status}')` });
+      }
+      if (!m.player_a_deposited || !m.player_b_deposited) {
+        return res.status(400).json({ error: 'Both players must deposit before the game starts' });
+      }
+      playerX = m.player_a_id;
+      playerO = m.player_b_id;
     }
 
     if (!playerX || !playerO) {
@@ -127,6 +129,15 @@ router.get('/:gameId', requireAuth, async (req, res, next) => {
 
 /**
  * POST /api/tictactoe/:gameId/move
+ *
+ * Guards:
+ *   - The underlying match must be `active` (or the tournament must be
+ *     `full`/`active`) before a move is recorded — otherwise we'd let the
+ *     game progress on stake-less data.
+ *   - When the game ends, we attempt an atomic UPDATE that flips the match
+ *     row to `completed` only if it's currently `active`. The oracle
+ *     settle/cancel is only fired when that UPDATE actually wins (1 row
+ *     affected), so concurrent move handlers can't double-settle.
  */
 router.post('/:gameId/move', requireAuth, async (req, res, next) => {
   try {
@@ -146,6 +157,21 @@ router.post('/:gameId/move', requireAuth, async (req, res, next) => {
     if (game.status !== 'active') return res.status(400).json({ error: 'Game over' });
     if (index < 0 || index > 8) return res.status(400).json({ error: 'Invalid move' });
 
+    // Verify the underlying funded entity is in a playable state.
+    if (game.match_id) {
+      const mRes = await db.query(`SELECT status FROM matches WHERE match_id = $1`, [game.match_id]);
+      if (mRes.rows.length === 0 || mRes.rows[0].status !== 'active') {
+        return res.status(400).json({ error: 'Match is not active' });
+      }
+    } else if (game.tournament_id) {
+      const tRes = await db.query(`SELECT status FROM tournaments WHERE tournament_id = $1`, [game.tournament_id]);
+      if (tRes.rows.length === 0) return res.status(400).json({ error: 'Tournament not found' });
+      const tStatus = tRes.rows[0].status;
+      if (tStatus !== 'full' && tStatus !== 'active') {
+        return res.status(400).json({ error: `Tournament not playable (status='${tStatus}')` });
+      }
+    }
+
     // Determine player's symbol
     let playerSymbol;
     if (game.player_x_id === userId) playerSymbol = 'X';
@@ -162,7 +188,7 @@ router.post('/:gameId/move', requireAuth, async (req, res, next) => {
     boardArr[index] = playerSymbol;
     const newBoard = boardArr.join('');
     const newTurn = playerSymbol === 'X' ? 'O' : 'X';
-    
+
     let newStatus = 'active';
     const winResult = checkWin(newBoard);
 
@@ -170,7 +196,7 @@ router.post('/:gameId/move', requireAuth, async (req, res, next) => {
     else if (winResult === 'O') newStatus = 'won_o';
     else if (winResult === 'draw') newStatus = 'draw';
 
-    // Update DB
+    // Update game row
     const updateRes = await db.query(
       `UPDATE tictactoe_games SET board = $1, turn = $2, status = $3 WHERE game_id = $4 RETURNING *`,
       [newBoard, newTurn, newStatus, gameId]
@@ -181,110 +207,117 @@ router.post('/:gameId/move', requireAuth, async (req, res, next) => {
     const io = getIO();
     io.to(gameId).emit('game_update', game);
 
-    // If game over, update DB immediately then attempt on-chain settlement async
+    // If game over, attempt to flip the match/tournament to `completed` —
+    // but ONLY the first writer (whose UPDATE returns a row) gets to fire
+    // on-chain settlement. This prevents two concurrent move handlers from
+    // racing into double-settle.
     if (newStatus === 'won_x' || newStatus === 'won_o' || newStatus === 'draw') {
       const winnerId = newStatus === 'won_x' ? game.player_x_id : (newStatus === 'won_o' ? game.player_o_id : null);
 
       if (game.tournament_id) {
-        // Immediately mark tournament as completed in DB — lobby will update on next poll
-        await db.query(
-          `UPDATE tournaments SET status = 'completed', winner_id = $1 WHERE tournament_id = $2`,
+        const claimed = await db.query(
+          `UPDATE tournaments
+              SET status = 'completed',
+                  winner_id = $1,
+                  completed_at = NOW()
+            WHERE tournament_id = $2 AND status IN ('full', 'active')
+            RETURNING *`,
           [winnerId, game.tournament_id]
         );
-        // Broadcast globally so lobby refreshes immediately via socket
-        io.emit('settlement_success', { txHash: null });
 
-        // Attempt on-chain settlement in the background (non-blocking)
-        if (winnerId) {
-          const winnerWalletRes = await db.query('SELECT wallet_address FROM users WHERE user_id = $1', [winnerId]);
-          const winnerWallet = winnerWalletRes.rows[0]?.wallet_address;
+        if (claimed.rows.length === 1) {
+          io.emit('settlement_success', { txHash: null });
 
-          if (winnerWallet && tournamentContract) {
-            const tRes = await db.query(
-              "SELECT encode(contract_tournament_id, 'hex') AS contract_id FROM tournaments WHERE tournament_id = $1",
-              [game.tournament_id]
-            );
-            const contractId = '0x' + tRes.rows[0].contract_id;
-            console.log(`Settling tournament ${contractId} for winner ${winnerWallet}`);
+          if (winnerId) {
+            const winnerWalletRes = await db.query('SELECT wallet_address FROM users WHERE user_id = $1', [winnerId]);
+            const winnerWallet = winnerWalletRes.rows[0]?.wallet_address;
 
-            // Fire and forget — doesn't block the response
-            tournamentContract.settle(contractId, winnerWallet)
-              .then(tx => {
-                io.to(gameId).emit('settlement_pending', { txHash: tx.hash });
-                return tx.wait().then(() => {
-                  db.query(
-                    `UPDATE tournaments SET settle_tx = $1 WHERE tournament_id = $2`,
-                    [tx.hash, game.tournament_id]
-                  );
-                  io.emit('settlement_success', { txHash: tx.hash });
-                  console.log(`Tournament ${game.tournament_id} settled on-chain: ${tx.hash}`);
-                });
-              })
-              .catch(e => console.error('Tournament on-chain settlement failed:', e));
-          }
-        }
-      } else if (game.match_id) {
-        if (winnerId) {
-          const winnerWalletRes = await db.query('SELECT wallet_address FROM users WHERE user_id = $1', [winnerId]);
-          const winnerWallet = winnerWalletRes.rows[0]?.wallet_address;
+            const tournamentContract = getTournamentContract();
+            if (winnerWallet && tournamentContract) {
+              const tRes = await db.query(
+                "SELECT encode(contract_tournament_id, 'hex') AS contract_id FROM tournaments WHERE tournament_id = $1",
+                [game.tournament_id]
+              );
+              const contractId = '0x' + tRes.rows[0].contract_id;
+              console.log(`Settling tournament ${contractId} for winner ${winnerWallet}`);
 
-          if (winnerWallet) {
-            // Match settlement — use hex-encoded escrow_match_id
-            const mRes = await db.query(
-              "SELECT encode(escrow_match_id, 'hex') AS contract_id FROM matches WHERE match_id = $1",
-              [game.match_id]
-            );
-            const contractId = '0x' + mRes.rows[0].contract_id;
-
-            console.log(`Settling match ${contractId} for winner ${winnerWallet}`);
-            
-            // Mark immediately in DB
-            await db.query(
-              `UPDATE matches SET status = 'completed', winner_id = $1 WHERE match_id = $2`,
-              [winnerId, game.match_id]
-            );
-            io.emit('settlement_success', { txHash: null });
-
-            if (escrowContract) {
-              escrowContract.settle(contractId, winnerWallet)
+              tournamentContract.settle(contractId, winnerWallet)
                 .then(tx => {
                   io.to(gameId).emit('settlement_pending', { txHash: tx.hash });
                   return tx.wait().then(() => {
                     db.query(
-                      `UPDATE matches SET settle_tx = $1 WHERE match_id = $2`,
-                      [tx.hash, game.match_id]
+                      `UPDATE tournaments SET settlement_tx = $1 WHERE tournament_id = $2`,
+                      [tx.hash, game.tournament_id]
                     );
                     io.emit('settlement_success', { txHash: tx.hash });
-                    console.log(`Match ${game.match_id} settled on-chain: ${tx.hash}`);
+                    console.log(`Tournament ${game.tournament_id} settled on-chain: ${tx.hash}`);
                   });
                 })
-                .catch(e => console.error('Match on-chain settlement failed:', e));
-            } else {
-              console.warn('Match ended but escrow contract not configured');
+                .catch(e => console.error('Tournament on-chain settlement failed:', e));
             }
           }
-        } else if (newStatus === 'draw') {
-          // A draw -> cancel the match to refund players
+        }
+      } else if (game.match_id) {
+        // Atomic claim: only the first thread to flip status='active' -> 'completed' fires settle.
+        const claimed = await db.query(
+          `UPDATE matches
+              SET status = 'completed',
+                  winner_id = $1,
+                  completed_at = NOW()
+            WHERE match_id = $2 AND status = 'active'
+            RETURNING *`,
+          [winnerId, game.match_id]
+        );
+
+        if (claimed.rows.length === 1) {
+          io.emit('settlement_success', { txHash: null });
+
+          const escrowContract = getEscrowContract();
           const mRes = await db.query(
             "SELECT encode(escrow_match_id, 'hex') AS contract_id FROM matches WHERE match_id = $1",
             [game.match_id]
           );
           const contractId = '0x' + mRes.rows[0].contract_id;
-          
-          await db.query(`UPDATE matches SET status = 'completed' WHERE match_id = $1`, [game.match_id]);
-          io.emit('settlement_success', { txHash: null });
 
-          if (escrowContract) {
-            escrowContract.cancel(contractId)
-              .then(tx => {
-                io.to(gameId).emit('settlement_pending', { txHash: tx.hash });
-                return tx.wait().then(() => {
-                  db.query(`UPDATE matches SET settle_tx = $1 WHERE match_id = $2`, [tx.hash, game.match_id]);
-                  io.emit('settlement_success', { txHash: tx.hash });
-                  console.log(`Match ${game.match_id} draw refunded on-chain: ${tx.hash}`);
-                });
-              })
-              .catch(e => console.error('Match draw refund failed:', e));
+          if (winnerId) {
+            const winnerWalletRes = await db.query('SELECT wallet_address FROM users WHERE user_id = $1', [winnerId]);
+            const winnerWallet = winnerWalletRes.rows[0]?.wallet_address;
+
+            if (winnerWallet) {
+              console.log(`Settling match ${contractId} for winner ${winnerWallet}`);
+
+              if (escrowContract) {
+                escrowContract.settle(contractId, winnerWallet)
+                  .then(tx => {
+                    io.to(gameId).emit('settlement_pending', { txHash: tx.hash });
+                    return tx.wait().then(() => {
+                      db.query(
+                        `UPDATE matches SET settlement_tx = $1 WHERE match_id = $2`,
+                        [tx.hash, game.match_id]
+                      );
+                      io.emit('settlement_success', { txHash: tx.hash });
+                      console.log(`Match ${game.match_id} settled on-chain: ${tx.hash}`);
+                    });
+                  })
+                  .catch(e => console.error('Match on-chain settlement failed:', e));
+              } else {
+                console.warn('Match ended but escrow contract not configured');
+              }
+            }
+          } else if (newStatus === 'draw') {
+            // Draw -> cancel the match to refund both players
+            if (escrowContract) {
+              escrowContract.cancel(contractId)
+                .then(tx => {
+                  io.to(gameId).emit('settlement_pending', { txHash: tx.hash });
+                  return tx.wait().then(() => {
+                    db.query(`UPDATE matches SET settlement_tx = $1 WHERE match_id = $2`, [tx.hash, game.match_id]);
+                    io.emit('settlement_success', { txHash: tx.hash });
+                    console.log(`Match ${game.match_id} draw refunded on-chain: ${tx.hash}`);
+                  });
+                })
+                .catch(e => console.error('Match draw refund failed:', e));
+            }
           }
         }
       }

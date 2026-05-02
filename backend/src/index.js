@@ -6,6 +6,8 @@ const express    = require('express');
 const cors       = require('cors');
 const helmet     = require('helmet');
 const morgan     = require('morgan');
+const rateLimit  = require('express-rate-limit');
+const crypto     = require('crypto');
 
 const http       = require('http');
 const socket     = require('./socket');
@@ -67,7 +69,56 @@ app.get('/health', (_req, res) => {
   });
 });
 
-// ── Routes (TODO: wire up in Phase 3-6) ─────────────────────
+// ── Rate limiters ────────────────────────────────────────────
+// Per-route limiters scope abuse to specific endpoints rather than the entire
+// surface (so e.g. a hot game-loop /move endpoint can't be DoSed by burst
+// auth attempts elsewhere). Limits are per-IP via the standard X-Forwarded-For
+// chain plus the connection IP — appropriate for an authenticated API in
+// front of a CDN/load balancer.
+const authLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests' },
+});
+
+const webhookLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests' },
+});
+
+const matchActionLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests' },
+});
+
+const tttMoveLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests' },
+});
+
+// Apply BEFORE the route mounts so the limiter sees the request first.
+app.use('/auth', authLimiter);
+app.use('/webhooks', webhookLimiter);
+// Path-pattern limiters: only the deposit/accept/move routes get throttled,
+// not GET /matches.
+app.use('/matches/:id/deposit', matchActionLimiter);
+app.use('/matches/:id/accept', matchActionLimiter);
+// Apply TTT move limiter to any POST that ends in /move (e.g.
+// /tictactoe/:gameId/move).
+app.use(/^\/tictactoe\/.*move.*$/, tttMoveLimiter);
+
+// ── Routes ───────────────────────────────────────────────────
 // Phase 3
 const authRoutes = require('./routes/auth');
 app.use('/auth', authRoutes);
@@ -106,12 +157,27 @@ app.use((_req, res) => {
 });
 
 // ── Global error handler ─────────────────────────────────────
+// In production we redact `err.message` (which can include stack frames,
+// SQL fragments, RPC internals). The full error is logged server-side and
+// correlated with the response via a short requestId so support can trace
+// it. In dev we keep the raw message visible to make debugging fast.
 // eslint-disable-next-line no-unused-vars
 app.use((err, _req, res, _next) => {
-  console.error('Unhandled error:', err);
-  res.status(err.status || 500).json({
+  const requestId = crypto.randomBytes(8).toString('hex');
+  console.error(`[req:${requestId}] Unhandled error:`, err);
+
+  const status = err.status || 500;
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(status).json({
+      error: 'Internal server error',
+      requestId,
+    });
+  }
+  res.status(status).json({
     error: err.message || 'Internal server error',
     code:  err.code    || 'INTERNAL_ERROR',
+    requestId,
+    stack: err.stack,
   });
 });
 
